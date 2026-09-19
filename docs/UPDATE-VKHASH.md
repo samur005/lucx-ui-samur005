@@ -1,13 +1,8 @@
 # Updates + vk-hash
 
-Panel Update / `x-ui update` downloads AlexeyLCP release binary and wipes a custom-built x-ui.
-GitHub Sync fork with Discard wipes vkhash.go.
-`git merge upstream/main` keeps the patch if you keep vkhash.go and EnsureVkHashes.
+Полная инструкция: [VKHASH.md](VKHASH.md)
 
-Fork has no Releases; install.sh still pulls AlexeyLCP tarball.
-Need Go 1.27+ to build this tree. VPS currently has Go 1.22.
-
-Re-apply:
-```
-curl -fsSL https://raw.githubusercontent.com/samur005/lucx-ui-samur005/main/scripts/apply-vkhash.sh | bash
-```
+- `x-ui update` и кнопка Update в панели качают релиз AlexeyLCP и **затирают** свой бинарник.
+- GitHub Sync fork + Discard **стирает** `vkhash.go`.
+- Нужны апдейты AlexeyLCP: `git fetch upstream && git merge upstream/main`, оставь `vkhash.go` и `EnsureVkHashes`.
+- Вернуть патч: `curl -fsSL https://raw.githubusercontent.com/samur005/lucx-ui-samur005/main/scripts/apply-vkhash.sh | bash`
