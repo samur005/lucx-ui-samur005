@@ -67,6 +67,8 @@ English: [FORK.en.md](FORK.en.md)
 
 Если панели ещё нет: сначала поставьте сток (`install.sh` апстрима) **или** следуйте сервисным инструкциям проекта, затем замените бинарник сборкой форка. База (`/etc/x-ui/`), сервис и порты при замене бинарника сохраняются.
 
+**Никогда не используйте** кнопку Update в панели, `x-ui update` или стоковый `install.sh` для «обновления форка» — они поставят бинарник апстрима без фич.
+
 ---
 
 ## Установка (сборка из форка)
@@ -74,7 +76,7 @@ English: [FORK.en.md](FORK.en.md)
 **Требования:**
 
 - Go по версии из `go.mod` (сейчас **1.27.1+**)
-- Node.js по `frontend/package.json` / `.nvmrc` (сейчас **≥ 24**, npm ≥ 10)
+- Node.js по `frontend/package.json` / `.nvmrc` (сейчас **≥ 24**, npm ≥ 10) — на VPS путь к Node может отличаться; при необходимости поправьте `PATH`
 - Уже установленный сервис `x-ui` **или** готовность поставить сток, затем заменить бинарник
 
 ### Клон и сборка
@@ -133,44 +135,79 @@ bash <(curl -fL https://raw.githubusercontent.com/AlexeyLCP/lucx-ui/main/install
 
 ---
 
-## Обновление без потери форка
+## Когда у AlexeyLCP вышел новый релиз — обновление форка без потери фич, затем VPS
+
+Канонический порядок из двух частей. Команды ниже — на VPS (или любом клоне) от root в каталоге `/usr/local/src/lucx-ui-samur005`. Пока открыт PR #1 используйте ветку `feat/native-vk-hash-generator`; после merge в `main` замените имя ветки на `main`.
 
 | Действие | Исходники на GitHub | Бинарник на VPS |
 | --- | --- | --- |
-| Кнопка Update в панели / `x-ui update` | не трогает ваш fork | **затирает** кастомный бинарник стоком AlexeyLCP |
+| Кнопка Update в панели / `x-ui update` / стоковый `install.sh` | не трогает ваш fork | **затирает** кастомный бинарник стоком AlexeyLCP |
 | GitHub **Sync fork → Discard commits** | **стирает** коммиты форка (`vkcreator`, Templates, …) | VPS не трогает |
-| `git fetch upstream` + `git merge upstream/main` | фичи остаются, если при конфликтах их сохранить | VPS не трогает — нужна повторная сборка |
+| **Часть 1:** `git merge upstream/main` + push (сохранить фичи при конфликтах) | фичи остаются | VPS не трогает |
+| **Часть 2:** сборка frontend + Go и замена бинарника | не меняет GitHub | порты и БД сохраняются |
 
 ### Не делайте
 
-- **Sync fork → Discard commits** на GitHub.
-- Полагаться только на `x-ui update` / Update в панели — после этого снова нужна сборка из форка (или останетесь на стоке без фич).
+- **Sync fork → Discard commits** на GitHub. Допустимо только **Sync fork → Update** (если интерфейс предлагает Update без Discard).
+- Update в панели / `x-ui update` / стоковый `install.sh` — после этого снова нужна сборка из форка (или останетесь на стоке без фич).
 
-### Рекомендуемый путь (подтянуть апстрим, сохранить форк)
+### Часть 1 — подтянуть апстрим AlexeyLCP, сохранив vk-hash и шаблоны inbound
 
 ```bash
 cd /usr/local/src/lucx-ui-samur005
-
 git remote add upstream https://github.com/AlexeyLCP/lucx-ui.git 2>/dev/null || true
-git fetch upstream
-
-# пока фичи только в ветке PR:
+git fetch origin
+git fetch upstream --tags
 git checkout feat/native-vk-hash-generator
+git pull --ff-only origin feat/native-vk-hash-generator
 git merge upstream/main
-# после merge PR #1: работайте из main и мержите туда же
-
-# при конфликтах сохраните:
-#   - EnsureVkHashes / internal/lucx/tunnel/vkhash.go
-#   - internal/lucx/vkcreator/
-#   - UI Templates (InboundTemplatesButton, inbound-templates.ts, i18n keys)
-#   - QwdttVkPanel и API /panel/api/tunnel/vk/*
-
-git push origin HEAD
-
-cd frontend && npm ci && npm run build && cd ..
-go build -o /usr/local/x-ui/x-ui.new .
-systemctl stop x-ui && mv /usr/local/x-ui/x-ui.new /usr/local/x-ui/x-ui && systemctl start x-ui
 ```
+
+**При успешном merge без конфликтов:**
+
+```bash
+git push origin feat/native-vk-hash-generator
+```
+
+**При конфликтах** разрешите их, **сохранив** файлы и логику форка:
+
+- `EnsureVkHashes` и `internal/lucx/tunnel/vkhash.go`
+- `internal/lucx/vkcreator/`
+- файлы inbound Templates (кнопка «Шаблоны», пресеты, i18n)
+- `docs/FORK.md`
+
+Затем `git add` → `git commit` → `git push origin feat/native-vk-hash-generator`.
+
+На GitHub: **Sync fork → Update** — допустимо; **Discard** — запрещено.
+
+После merge PR #1 в `main` в командах выше используйте `main` вместо `feat/native-vk-hash-generator`.
+
+### Часть 2 — пересобрать панель на VPS (порты не меняются)
+
+Если путь к Node на сервере другой — поправьте `PATH` (пример ниже — типичный для установки Node 22 в `/usr/local/lib/nodejs/…`; ориентируйтесь на версию из `frontend/package.json` / `.nvmrc`).
+
+```bash
+export PATH="/usr/local/lib/nodejs/node-v22.20.0-linux-x64/bin:$PATH"
+cd /usr/local/src/lucx-ui-samur005
+git checkout feat/native-vk-hash-generator
+git pull --ff-only origin feat/native-vk-hash-generator
+cd frontend && npm install --no-audit --no-fund && npm run build && cd ..
+go build -o /usr/local/x-ui/x-ui.new .
+systemctl stop x-ui
+cp -a /usr/local/x-ui/x-ui "/usr/local/x-ui/x-ui.bak-$(date +%Y%m%d%H%M)"
+mv /usr/local/x-ui/x-ui.new /usr/local/x-ui/x-ui
+chmod +x /usr/local/x-ui/x-ui
+systemctl start x-ui
+systemctl is-active x-ui
+ss -tlnp | grep -E '29830|2096'
+```
+
+После merge PR #1 в `main` в checkout/pull используйте `main`.
+
+**Проверка UI после пересборки:**
+
+1. **Туннели → qWDTT → генератор vk_hash** — cookies, генерация, заполнение `VkHashes`.
+2. **Inbounds → «Шаблоны»** — пресеты подставляются.
 
 ### Если стёрся только хук EnsureVkHashes
 
@@ -180,7 +217,7 @@ systemctl stop x-ui && mv /usr/local/x-ui/x-ui.new /usr/local/x-ui/x-ui && syste
 curl -fsSL https://raw.githubusercontent.com/samur005/lucx-ui-samur005/feat/native-vk-hash-generator/scripts/apply-vkhash.sh | bash
 ```
 
-После merge в `main` URL можно заменить на `.../main/scripts/apply-vkhash.sh`. Затем снова `go build` и замена бинарника.
+После merge в `main` URL можно заменить на `.../main/scripts/apply-vkhash.sh`. Затем снова выполните **Часть 2** (сборка и замена бинарника).
 
 ---
 

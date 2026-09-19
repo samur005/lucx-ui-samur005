@@ -13,7 +13,7 @@
 
 ## Установка с фичами форка
 
-Стоковый `install.sh` / `x-ui update` качает **бинарник апстрима без этих фич**. Нужна сборка из этого репозитория.
+Стоковый `install.sh` / `x-ui update` / Update в панели качают **бинарник апстрима без этих фич**. Нужна сборка из этого репозитория.
 
 Пока открыт [PR #1](https://github.com/samur005/lucx-ui-samur005/pull/1), клонируйте ветку `feat/native-vk-hash-generator` (после merge — `main`):
 
@@ -30,11 +30,14 @@ Go — версия из `go.mod`; Node — из `frontend/package.json` / `.nvm
 **Полная инструкция (установка, env, обновление без затирания):** → **[docs/FORK.md](docs/FORK.md)**  
 English summary: [docs/FORK.en.md](docs/FORK.en.md)
 
-## Обновления
+## Обновления (когда вышел релиз AlexeyLCP)
 
-- Не жмите GitHub **Sync fork → Discard commits**.
-- Не полагайтесь только на `x-ui update` (вернёт стоковый бинарник).
-- Тяните апстрим через `git merge upstream/main`, сохраняя файлы форка, затем снова собирайте frontend + Go.
+Канонический плейбук из двух частей — в **[docs/FORK.md](docs/FORK.md)** (раздел «Когда у AlexeyLCP вышел новый релиз»):
+
+1. **Часть 1** — `git merge upstream/main` на ветке форка, сохранить vk-hash + шаблоны; push. Sync fork → Update OK; Discard запрещён.
+2. **Часть 2** — на VPS: `npm` build + `go build`, бэкап старого бинарника, замена `/usr/local/x-ui/x-ui`, проверка портов и UI (Туннели → qWDTT → генератор vk_hash; Inbounds → Шаблоны).
+
+Не используйте Update в панели / `x-ui update` / стоковый `install.sh` для обновления форка.
 
 ## Документация по vk-hash
 
