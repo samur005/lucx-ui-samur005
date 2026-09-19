@@ -23,10 +23,7 @@ export function QwdttVkPanel({ existingHashes, onHashes, onInvalidate }: Props) 
   const [vkCallId, setVkCallId] = useState('');
   const [vkBusy, setVkBusy] = useState(false);
 
-  const refreshVkStatus = async () => {
-    const res = await tunnelsApi.vkStatus();
-    if (!res.success || !res.obj) return;
-    const o = res.obj as Record<string, unknown>;
+  const applyVkStatus = (o: Record<string, unknown>) => {
     setVkOk(Boolean(o.cookies_ok));
     setVkExpired(Boolean(o.cookies_expired));
     setVkPresent(Boolean(o.cookies_present));
@@ -38,49 +35,55 @@ export function QwdttVkPanel({ existingHashes, onHashes, onInvalidate }: Props) 
     setVkCallId(sess?.call_id ?? '');
   };
 
+  const refreshVkStatus = async () => {
+    const res = await tunnelsApi.vkStatus();
+    if (!res.success || !res.obj) return;
+    applyVkStatus(res.obj as Record<string, unknown>);
+  };
+
   useEffect(() => {
-    void refreshVkStatus();
+    let cancelled = false;
+    void (async () => {
+      const res = await tunnelsApi.vkStatus();
+      if (cancelled || !res.success || !res.obj) return;
+      applyVkStatus(res.obj as Record<string, unknown>);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   return (
     <Card
       size="small"
       type="inner"
-      title={t('pages.tunnels.qwdtt.vk.title', 'VK hash generator')}
+      title={t('pages.tunnels.qwdtt.vk.title')}
       style={{ marginBottom: 16 }}
       extra={
         <Tag color={vkOk ? 'green' : vkExpired ? 'red' : vkPresent ? 'orange' : 'default'}>
           {vkOk
-            ? t('pages.tunnels.qwdtt.vk.statusOk', 'Cookies OK')
+            ? t('pages.tunnels.qwdtt.vk.statusOk')
             : vkExpired
-              ? t('pages.tunnels.qwdtt.vk.statusExpired', 'Cookies expired')
-              : t('pages.tunnels.qwdtt.vk.statusMissing', 'Cookies not set')}
+              ? t('pages.tunnels.qwdtt.vk.statusExpired')
+              : t('pages.tunnels.qwdtt.vk.statusMissing')}
         </Tag>
       }
     >
       {ctx}
       <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
-        {t(
-          'pages.tunnels.qwdtt.vk.hint',
-          'Paste remixsid (or full Cookie header) from a logged-in vk.com / vk.ru session. Generate creates a live call and fills VkHashes.',
-        )}
+        {t('pages.tunnels.qwdtt.vk.hint')}
       </Typography.Paragraph>
       {vkHint ? (
         <Typography.Paragraph type={vkExpired ? 'danger' : 'secondary'} style={{ fontSize: 12 }}>
           {vkHint}
         </Typography.Paragraph>
       ) : null}
-      <Typography.Text type="secondary">
-        {t('pages.tunnels.qwdtt.vk.cookies', 'VK cookies / remixsid')}
-      </Typography.Text>
+      <Typography.Text type="secondary">{t('pages.tunnels.qwdtt.vk.cookies')}</Typography.Text>
       <Input.TextArea
         rows={3}
         value={vkCookies}
         onChange={(e) => setVkCookies(e.target.value)}
-        placeholder={t(
-          'pages.tunnels.qwdtt.vk.cookiesPlaceholder',
-          'remixsid=VALUE   or  name=value; …',
-        )}
+        placeholder={t('pages.tunnels.qwdtt.vk.cookiesPlaceholder')}
         style={{ marginTop: 4, marginBottom: 8 }}
       />
       <Space wrap>
@@ -93,7 +96,7 @@ export function QwdttVkPanel({ existingHashes, onHashes, onInvalidate }: Props) 
               try {
                 const res = await tunnelsApi.vkSaveCookies(vkCookies.trim());
                 if (res.success) {
-                  messageApi.success(t('pages.tunnels.qwdtt.vk.savedCookies', 'Cookies saved'));
+                  messageApi.success(t('pages.tunnels.qwdtt.vk.savedCookies'));
                   await refreshVkStatus();
                 } else if (res.msg) messageApi.error(res.msg);
               } finally {
@@ -102,7 +105,7 @@ export function QwdttVkPanel({ existingHashes, onHashes, onInvalidate }: Props) 
             })();
           }}
         >
-          {t('pages.tunnels.qwdtt.vk.saveCookies', 'Save cookies')}
+          {t('pages.tunnels.qwdtt.vk.saveCookies')}
         </Button>
         <Button
           disabled={vkBusy}
@@ -113,7 +116,7 @@ export function QwdttVkPanel({ existingHashes, onHashes, onInvalidate }: Props) 
                 const res = await tunnelsApi.vkClearCookies();
                 if (res.success) {
                   setVkCookies('');
-                  messageApi.success(t('pages.tunnels.qwdtt.vk.clearedCookies', 'Cookies cleared'));
+                  messageApi.success(t('pages.tunnels.qwdtt.vk.clearedCookies'));
                   await refreshVkStatus();
                 } else if (res.msg) messageApi.error(res.msg);
               } finally {
@@ -122,7 +125,7 @@ export function QwdttVkPanel({ existingHashes, onHashes, onInvalidate }: Props) 
             })();
           }}
         >
-          {t('pages.tunnels.qwdtt.vk.clearCookies', 'Clear')}
+          {t('pages.tunnels.qwdtt.vk.clearCookies')}
         </Button>
         <Button
           type="primary"
@@ -136,7 +139,7 @@ export function QwdttVkPanel({ existingHashes, onHashes, onInvalidate }: Props) 
                 if (res.success && res.obj) {
                   const hash = String((res.obj as Record<string, unknown>).vk_hash ?? '');
                   if (hash) onHashes(hash);
-                  messageApi.success(t('pages.tunnels.qwdtt.vk.generated', 'vk_hash generated'));
+                  messageApi.success(t('pages.tunnels.qwdtt.vk.generated'));
                   await refreshVkStatus();
                   onInvalidate?.();
                 } else if (res.msg) messageApi.error(res.msg);
@@ -146,7 +149,7 @@ export function QwdttVkPanel({ existingHashes, onHashes, onInvalidate }: Props) 
             })();
           }}
         >
-          {t('pages.tunnels.qwdtt.vk.generate', 'Generate vk_hash')}
+          {t('pages.tunnels.qwdtt.vk.generate')}
         </Button>
         <Button
           danger
@@ -157,7 +160,7 @@ export function QwdttVkPanel({ existingHashes, onHashes, onInvalidate }: Props) 
               try {
                 const res = await tunnelsApi.vkStop(vkCallId);
                 if (res.success) {
-                  messageApi.success(t('pages.tunnels.qwdtt.vk.stopped', 'Call stop requested'));
+                  messageApi.success(t('pages.tunnels.qwdtt.vk.stopped'));
                   await refreshVkStatus();
                 } else if (res.msg) messageApi.error(res.msg);
               } finally {
@@ -166,7 +169,7 @@ export function QwdttVkPanel({ existingHashes, onHashes, onInvalidate }: Props) 
             })();
           }}
         >
-          {t('pages.tunnels.qwdtt.vk.stop', 'Stop call')}
+          {t('pages.tunnels.qwdtt.vk.stop')}
         </Button>
       </Space>
     </Card>
