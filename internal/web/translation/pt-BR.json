@@ -704,6 +704,16 @@
           "custom": "Personalizada"
         },
         "autoFill": "Preenchimento automático",
+      "templates": {
+        "button": "Modelos",
+        "applied": "Modelo aplicado",
+        "vlessXhttpReality": "VLESS + XHTTP + Reality",
+        "vlessGrpcReality": "VLESS + gRPC + Reality",
+        "vlessGrpcTls": "VLESS + gRPC + TLS",
+        "vlessWsTls": "VLESS + WS + TLS",
+        "vlessHttpupgradeTls": "VLESS + HTTPUpgrade + TLS",
+        "vlessKcp": "VLESS + KCP"
+      },
         "awgBrowserProfile": "Perfil do navegador",
         "awgBrowserProfileHint": "Impressão digital TLS do navegador a imitar para o perfil TLS. Chrome usa GREASE; Firefox usa ordenação NSS com padding; Safari usa ordenação Apple.",
         "awgBrowserChrome": "Chrome (mais recente)",
