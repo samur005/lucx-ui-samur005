@@ -41,6 +41,7 @@ import { keys } from '@/api/queryKeys';
 import { tunnelsApi } from '@/api/tunnels';
 import { FormField, useZodForm } from '@/components/form/rhf';
 import { QwdttConfigSchema, type QwdttConfig, type QwdttStatus } from '@/schemas/tunnel';
+import { QwdttVkPanel } from './QwdttVkPanel';
 
 type ProbeState = 'running' | 'stopped';
 
@@ -341,6 +342,12 @@ export function QwdttCard() {
               >
                 <Input.TextArea rows={2} placeholder="hash1,hash2" />
               </FormField>
+
+              <QwdttVkPanel
+                existingHashes={String(form.watch('vkHashes') ?? '')}
+                onHashes={(hash) => form.setValue('vkHashes', hash, { shouldDirty: true })}
+                onInvalidate={invalidate}
+              />
 
               <Row gutter={16}>
                 <Col xs={24} sm={12}>

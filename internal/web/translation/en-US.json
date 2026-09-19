@@ -484,6 +484,16 @@
       },
       "form": {
         "autoFill": "Auto Fill",
+      "templates": {
+        "button": "Templates",
+        "applied": "Template applied",
+        "vlessXhttpReality": "VLESS + XHTTP + Reality",
+        "vlessGrpcReality": "VLESS + gRPC + Reality",
+        "vlessGrpcTls": "VLESS + gRPC + TLS",
+        "vlessWsTls": "VLESS + WS + TLS",
+        "vlessHttpupgradeTls": "VLESS + HTTPUpgrade + TLS",
+        "vlessKcp": "VLESS + KCP"
+      },
         "moveUp": "Move up",
         "moveDown": "Move down",
         "addAll": "Add all",
@@ -2873,7 +2883,7 @@
           "password": "Main password",
           "passwordTip": "Shared password for the main profile. Leave empty to auto-generate on save.",
           "vkHashes": "VK call hashes",
-          "vkHashesTip": "Comma-separated live VK call join hashes. The call must stay open (\"end for me\", not \"end for all\").",
+          "vkHashesTip": "Comma-separated live VK call hashes. Use the generator below, or set LUCX_VK_HASH / external WDTT. Call must stay open (\"end for me\").",
           "listenRaw": "Raw-IP listen",
           "listenRawTip": "Optional raw-IP path without WireGuard (host:port). Empty disables.",
           "configDir": "State directory",
@@ -2890,6 +2900,23 @@
           "uploaded": "Binary uploaded",
           "downloaded": "Binary downloaded",
           "deleted": "Binary deleted"
+        },
+        "vk": {
+          "title": "VK hash generator",
+          "hint": "Paste remixsid (or full Cookie header) from a logged-in vk.com / vk.ru session. Generate creates a live call and fills VkHashes. Keep the call open (\"end for me\", not \"end for all\").",
+          "cookies": "VK cookies / remixsid",
+          "cookiesPlaceholder": "remixsid=VALUE   or  name=value; …",
+          "saveCookies": "Save cookies",
+          "clearCookies": "Clear",
+          "generate": "Generate vk_hash",
+          "stop": "Stop call",
+          "statusOk": "Cookies OK",
+          "statusExpired": "Cookies expired",
+          "statusMissing": "Cookies not set",
+          "generated": "vk_hash generated",
+          "savedCookies": "Cookies saved",
+          "clearedCookies": "Cookies cleared",
+          "stopped": "Call stop requested"
         }
       },
       "csqtt": {

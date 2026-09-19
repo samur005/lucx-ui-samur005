@@ -51,6 +51,7 @@ const JSON_HEADERS = { headers: { 'Content-Type': 'application/json' } };
 const NAIVE = '/panel/api/tunnel/naive';
 const OLCRTC = '/panel/api/tunnel/olcrtc';
 const QWDTT = '/panel/api/tunnel/qwdtt';
+const VK = '/panel/api/tunnel/vk';
 const CSQTT = '/panel/api/tunnel/csqtt';
 const MIERU = '/panel/api/tunnel/mieru';
 const TRUSTTUNNEL = '/panel/api/tunnel/trusttunnel';
@@ -253,4 +254,23 @@ export const tunnelsApi = {
   },
   mtproxyDeleteBinary: (): Promise<Msg<null>> =>
     HttpUtil.post<null>(`${MTPROXY}/deleteBinary`, {}, JSON_HEADERS),
+
+  // Native VK Creator (vk_hash from panel cookies → VK calls.start)
+  vkStatus: (): Promise<Msg<Record<string, unknown>>> =>
+    HttpUtil.get<Record<string, unknown>>(`${VK}/status`, undefined, { silent: true }),
+  vkSaveCookies: (cookie_string: string): Promise<Msg<Record<string, unknown>>> =>
+    HttpUtil.post<Record<string, unknown>>(`${VK}/cookies`, { cookie_string }, JSON_HEADERS),
+  vkClearCookies: (): Promise<Msg<Record<string, unknown>>> =>
+    HttpUtil.post<Record<string, unknown>>(`${VK}/cookies/clear`, {}, JSON_HEADERS),
+  vkCreate: (opts?: {
+    apply?: boolean;
+    existing?: string;
+  }): Promise<Msg<Record<string, unknown>>> =>
+    HttpUtil.post<Record<string, unknown>>(
+      `${VK}/create`,
+      { apply: opts?.apply ?? true, existing: opts?.existing ?? '' },
+      JSON_HEADERS,
+    ),
+  vkStop: (call_id?: string): Promise<Msg<Record<string, unknown>>> =>
+    HttpUtil.post<Record<string, unknown>>(`${VK}/stop`, { call_id: call_id ?? '' }, JSON_HEADERS),
 };
