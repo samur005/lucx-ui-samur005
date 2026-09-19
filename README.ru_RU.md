@@ -1,9 +1,46 @@
-<!-- LUCX-HOOK: Russian README lives at repo root. Keep this stub so old links work. -->
-# LucX-UI (fork samur005)
+<!-- LUCX-HOOK: Russian fork landing. Keep in sync with docs/FORK.md. -->
+# LucX-UI — форк samur005
 
-Русская документация апстрима — в [главном README](README.md).
+Репозиторий: [samur005/lucx-ui-samur005](https://github.com/samur005/lucx-ui-samur005)  
+Апстрим: [AlexeyLCP/lucx-ui](https://github.com/AlexeyLCP/lucx-ui)
 
-**Этот форк:** автоген qWDTT vk-hash, установка и обновления без затирания патча — [docs/VKHASH.md](docs/VKHASH.md).
+Это форк панели LucX с двумя практическими доработками поверх апстрима. Общая документация панели (быстрый старт, Docker, лицензия) — в корневом [README.md](README.md). Ниже — только то, что добавляет **этот** форк.
 
-[English](docs/readme/README.en_US.md)
+## Что добавлено
+
+1. **Native генератор vk_hash для qWDTT** — cookies VK в панели → живой звонок → заполнение `VkHashes` (Туннели → qWDTT → **«Генератор vk_hash»**). Запасные пути: `LUCX_VK_HASH` и опциональный внешний WDTT (`LUCX_WDTT_*`). Код: `internal/lucx/vkcreator/`, API `/panel/api/tunnel/vk/*`.
+2. **Шаблоны inbound** — кнопка **«Шаблоны»** в модалке создания/редактирования inbound с пресетами VLESS (XHTTP/gRPC/WS/HTTPUpgrade/KCP + Reality/TLS).
+
+## Установка с фичами форка
+
+Стоковый `install.sh` / `x-ui update` качает **бинарник апстрима без этих фич**. Нужна сборка из этого репозитория.
+
+Пока открыт [PR #1](https://github.com/samur005/lucx-ui-samur005/pull/1), клонируйте ветку `feat/native-vk-hash-generator` (после merge — `main`):
+
+```bash
+git clone -b feat/native-vk-hash-generator https://github.com/samur005/lucx-ui-samur005.git /usr/local/src/lucx-ui-samur005
+cd /usr/local/src/lucx-ui-samur005
+cd frontend && npm ci && npm run build && cd ..
+go build -o /usr/local/x-ui/x-ui.new .
+systemctl stop x-ui && mv /usr/local/x-ui/x-ui.new /usr/local/x-ui/x-ui && systemctl start x-ui
+```
+
+Go — версия из `go.mod`; Node — из `frontend/package.json` / `.nvmrc`. Если панели ещё нет — сначала стоковый `install.sh`, затем замена бинарника.
+
+**Полная инструкция (установка, env, обновление без затирания):** → **[docs/FORK.md](docs/FORK.md)**  
+English summary: [docs/FORK.en.md](docs/FORK.en.md)
+
+## Обновления
+
+- Не жмите GitHub **Sync fork → Discard commits**.
+- Не полагайтесь только на `x-ui update` (вернёт стоковый бинарник).
+- Тяните апстрим через `git merge upstream/main`, сохраняя файлы форка, затем снова собирайте frontend + Go.
+
+## Документация по vk-hash
+
+- [docs/VKHASH.md](docs/VKHASH.md) — подробно  
+- [docs/vkhash-autogen.md](docs/vkhash-autogen.md) — кратко  
+- [CREDITS.md](CREDITS.md) — provenance WDTT  
+
+[English upstream README](docs/readme/README.en_US.md) · [Русский README апстрима](README.md)
 <!-- END LUCX-HOOK -->
