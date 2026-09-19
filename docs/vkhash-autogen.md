@@ -11,3 +11,5 @@
 В UI: **Tunnels → qWDTT → VK hash generator** — вставить remixsid, Save cookies, Generate vk_hash.
 
 `x-ui update` с AlexeyLCP стирает кастомный бинарник. Исходники держи `git merge upstream/main`.
+
+Установка и обновление форка: [FORK.md](FORK.md).
