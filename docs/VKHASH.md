@@ -13,7 +13,8 @@
 Форк при пустом поле подставляет hash из:
 
 1. `LUCX_VK_HASH`
-2. иначе `POST {LUCX_WDTT_URL}/panel/api/vk/call/create`
+2. native VK Creator (cookies в панели → `calls.start`)
+3. иначе `POST {LUCX_WDTT_URL}/panel/api/vk/call/create`
 
 AntiBS2vpn бот ходит в **тот же HTTP API** панели (`/login`, inbound/client, `/sub/{id}`). Отдельного «API форка» нет. Переключение бота = тот же URL панели LucX в карточке локации.
 
@@ -26,16 +27,18 @@ AntiBS2vpn бот ходит в **тот же HTTP API** панели (`/login`,
 1. **Inbounds (Инбаунды)** → inbound протокола **qWDTT** → поле **VK hashes** (`settings.vkHashes`).
 2. **Tunnels (Туннели)** → карточка **qWDTT** → то же поле **VK hashes**.
 
-Само «окно авторизации VK» (создание звонка / hash) живёт **не в LucX**, а в панели **WDTT**:
+**Native (этот форк):** Tunnels → qWDTT → блок **VK hash generator**
+(или API `/panel/api/tunnel/vk/*`). Cookies → create → поле `vkHashes`.
+
+Внешний WDTT по-прежнему опционален:
 
 - URL вида `https://turn.…/wdtt/`
 - `POST /panel/api/vk/call/create` → `{ vk_hash }`
-- в веб-морде WDTT это раздел VK-звонка / call hash
 
 Цепочка:
 
 ```
-WDTT (создаёт vk_hash) → LucX inbound qWDTT.vkHashes → подписка /sub/… → клиент qWDTT
+[native cookies | LUCX_VK_HASH | WDTT] → LucX qWDTT.vkHashes → /sub/… → клиент
 ```
 
 Бот AntiBS2vpn умеет сам дописать `vkHashes` в inbound LucX, даже если бинарник панели стоковый.
