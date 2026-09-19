@@ -1,0 +1,35 @@
+name: restore-vk-i18n
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/native-vk-hash-generator
+          fetch-depth: 0
+      - name: Restore en-US and apply VK i18n
+        run: |
+          set -euo pipefail
+          git checkout cdf20c220dbe228b84b21be925435e5bd494db34 -- internal/web/translation/en-US.json
+          python3 scripts/apply_vk_i18n.py
+          git config user.name "samur005"
+          git config user.email "samur_005@mail.ru"
+          git add internal/web/translation/en-US.json internal/web/translation/ru-RU.json frontend/src/pages/tunnels/QwdttVkPanel.tsx
+          git rm -f --ignore-unmatch tmp-i18n-size-probe.txt || true
+          if git status --porcelain | grep -q .; then
+            git commit -m "$(cat <<'EOF'
+i18n(qwdtt): add en-US/ru-RU strings for native VK hash generator
+
+Fill pages.tunnels.qwdtt.vk.* keys so the panel no longer relies on
+English defaultValue fallbacks; tip text points at the in-panel generator.
+Also restores en-US.json after an accidental overwrite during MCP push.
+EOF
+)"
+            git push origin HEAD:feat/native-vk-hash-generator
+          else
+            echo "nothing to commit"
+          fi
