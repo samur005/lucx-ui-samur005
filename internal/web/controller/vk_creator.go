@@ -187,3 +187,13 @@ func applyVkHashToQwdttInbound(hash string) error {
 	}
 	return nil
 }
+
+// registerVKRoutes mounts native VK Creator endpoints under /panel/api/tunnel/vk/*.
+func (a *TunnelController) registerVKRoutes(g *gin.RouterGroup) {
+	vk := g.Group("/vk")
+	vk.GET("/status", a.vkStatus)
+	vk.POST("/cookies", a.vkSaveCookies)
+	vk.POST("/cookies/clear", a.vkClearCookies)
+	vk.POST("/create", a.vkCreateCall)
+	vk.POST("/stop", a.vkStopCall)
+}
