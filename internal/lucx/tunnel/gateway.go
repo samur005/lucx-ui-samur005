@@ -7,9 +7,12 @@
 package tunnel
 
 import (
+	"context"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const Gateway Name = "gateway"
@@ -27,7 +30,7 @@ const (
 	ClassSkip        = "skip"
 )
 
-// GatewayRoute is one SNI → loopback backend for nginx stream.
+// GatewayRoute is one SNI → loopback backend for Caddy L4.
 type GatewayRoute struct {
 	SNI  string `json:"sni"`
 	Dest string `json:"dest"`
@@ -44,12 +47,17 @@ type GatewaySnapshotRow struct {
 
 // GatewayConfig lives in inbound settings. Snapshot empty = mask not applied.
 type GatewayConfig struct {
-	Remark     string               `json:"remark"`
-	Enabled    bool                 `json:"enabled"`
-	PublicHost string               `json:"publicHost"`
-	Routes     []GatewayRoute       `json:"routes"`
-	Snapshot   []GatewaySnapshotRow `json:"snapshot"`
-	Fallback   string               `json:"fallback,omitempty"`
+	Remark       string               `json:"remark"`
+	Enabled      bool                 `json:"enabled"`
+	PublicHost   string               `json:"publicHost"`
+	BindIP       string               `json:"bindIP,omitempty"`
+	Routes       []GatewayRoute       `json:"routes"`
+	Snapshot     []GatewaySnapshotRow `json:"snapshot"`
+	Fallback     string               `json:"fallback,omitempty"`
+	UFW          bool                 `json:"ufw,omitempty"`
+	UFWWasActive bool                 `json:"ufwWasActive,omitempty"`
+	HidePanel    bool                 `json:"hidePanel,omitempty"`
+	PanelRoutes  []CoverRoute         `json:"panelRoutes,omitempty"`
 }
 
 func DefaultGatewayConfig() GatewayConfig {
@@ -71,15 +79,35 @@ func (c GatewayConfig) Applied() bool {
 	return len(c.Snapshot) > 0
 }
 
-func nginxMapKey(sni string) string {
+func sniMapKey(sni string) string {
 	sni = strings.ToLower(strings.TrimSpace(sni))
 	sni = strings.ReplaceAll(sni, `"`, "")
 	sni = strings.ReplaceAll(sni, " ", "")
 	return sni
 }
 
-// RenderNginxConf is stream ssl_preread by SNI. Empty fallback = drop.
-func RenderNginxConf(listenPort int, pidPath string, routes []GatewayRoute, fallback string) string {
+// LocalIPv4 is the IPv4 of the default route. Empty if unknown.
+func LocalIPv4() string {
+	d := &net.Dialer{Timeout: 2 * time.Second}
+	c, err := d.DialContext(context.Background(), "udp4", "1.1.1.1:53")
+	if err != nil {
+		return ""
+	}
+	defer c.Close()
+	host, _, err := net.SplitHostPort(c.LocalAddr().String())
+	if err != nil {
+		return ""
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || ip.To4() == nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() {
+		return ""
+	}
+	return ip.String()
+}
+
+// RenderGatewayCaddyfile is Caddy L4 TLS SNI mux. Empty fallback = drop.
+// bindIP set → listen IP:port so loopback:port stays free for backends.
+func RenderGatewayCaddyfile(listenPort int, routes []GatewayRoute, fallback, bindIP string) string {
 	if listenPort <= 0 {
 		listenPort = gatewayDefaultPort
 	}
@@ -87,35 +115,34 @@ func RenderNginxConf(listenPort int, pidPath string, routes []GatewayRoute, fall
 	if fallback == "" {
 		fallback = gatewayDropBackend
 	}
-	var b strings.Builder
-	b.WriteString("worker_processes 1;\n")
-	b.WriteString("error_log stderr error;\n")
-	if strings.TrimSpace(pidPath) != "" {
-		b.WriteString("pid " + pidPath + ";\n")
+	listen := ":" + strconv.Itoa(listenPort)
+	if ip := strings.TrimSpace(bindIP); ip != "" {
+		listen = ip + ":" + strconv.Itoa(listenPort)
 	}
-	b.WriteString("events { worker_connections 256; }\n")
-	b.WriteString("stream {\n")
-	b.WriteString("\tmap $ssl_preread_server_name $lucx_gw {\n")
+	var b strings.Builder
+	b.WriteString("{\n\tadmin off\n\tlayer4 {\n\t\t")
+	b.WriteString(listen)
+	b.WriteString(" {\n")
 	seen := map[string]bool{}
+	i := 0
 	for _, r := range routes {
-		k := nginxMapKey(r.SNI)
+		k := sniMapKey(r.SNI)
 		d := strings.TrimSpace(r.Dest)
 		if k == "" || d == "" || seen[k] {
 			continue
 		}
 		seen[k] = true
-		b.WriteString("\t\t" + k + " " + d + ";\n")
+		tag := "sni" + strconv.Itoa(i)
+		i++
+		b.WriteString("\t\t\t@" + tag + " tls sni " + k + "\n")
+		b.WriteString("\t\t\troute @" + tag + " {\n")
+		b.WriteString("\t\t\t\tproxy " + d + " {\n\t\t\t\t\tproxy_protocol v1\n\t\t\t\t}\n")
+		b.WriteString("\t\t\t}\n")
 	}
-	b.WriteString("\t\tdefault " + fallback + ";\n")
-	b.WriteString("\t}\n")
-	b.WriteString("\tserver {\n")
-	b.WriteString("\t\tlisten " + strconv.Itoa(listenPort) + ";\n")
-	b.WriteString("\t\tssl_preread on;\n")
-	b.WriteString("\t\tproxy_pass $lucx_gw;\n")
-	b.WriteString("\t\tproxy_timeout 1d;\n")
-	b.WriteString("\t\tproxy_connect_timeout 5s;\n")
-	b.WriteString("\t}\n")
-	b.WriteString("}\n")
+	b.WriteString("\t\t\troute {\n")
+	b.WriteString("\t\t\t\tproxy " + fallback + " {\n\t\t\t\t\tproxy_protocol v1\n\t\t\t\t}\n")
+	b.WriteString("\t\t\t}\n")
+	b.WriteString("\t\t}\n\t}\n}\n")
 	return b.String()
 }
 

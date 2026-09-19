@@ -19,6 +19,16 @@ import (
 
 func CoverKey(id int) string { return "cover-" + strconv.Itoa(id) }
 
+func gatewayPanelRoutes(others []*model.Inbound) []CoverRoute {
+	for _, o := range others {
+		cfg, ok := GatewayConfigFromInbound(o)
+		if ok && cfg.Applied() && cfg.HidePanel && len(cfg.PanelRoutes) > 0 {
+			return cfg.PanelRoutes
+		}
+	}
+	return nil
+}
+
 func CoverSiteDir(id int) string {
 	return filepath.Join(workDir(), CoverKey(id)+"-site")
 }
@@ -148,6 +158,7 @@ func CoverInstanceFromInbound(ib *model.Inbound, others []*model.Inbound, secret
 			att.naiveAuth = extra
 		}
 	}
+	att.routes = append(att.routes, gatewayPanelRoutes(others)...)
 
 	caddyfile := RenderCoverCaddyfile(cfg.Hostname, certFile, keyFile, att)
 	caddyPath := configPathFor(key, Cover)

@@ -131,12 +131,28 @@ type coverAttach struct {
 	skipHTTP       bool
 }
 
+func writeCaddyServers(b *strings.Builder, h1h2, proxyProtocol bool) {
+	if !h1h2 && !proxyProtocol {
+		return
+	}
+	b.WriteString("\tservers {\n")
+	if h1h2 {
+		b.WriteString("\t\tprotocols h1 h2\n")
+	}
+	if proxyProtocol {
+		b.WriteString("\t\tlistener_wrappers {\n")
+		b.WriteString("\t\t\tproxy_protocol {\n\t\t\t\ttimeout 5s\n\t\t\t\tallow 127.0.0.1/32 ::1/128\n\t\t\t}\n")
+		b.WriteString("\t\t\ttls\n")
+		b.WriteString("\t\t}\n")
+	}
+	b.WriteString("\t}\n")
+}
+
 func RenderCoverCaddyfile(hostname, cert, key string, a coverAttach) string {
 	var b strings.Builder
 	b.WriteString("{\n\tadmin off\n\tauto_https off\n\tskip_install_trust\n")
-	if a.tproxyRelay > 0 || (a.naive != nil && !a.naive.EnableH3) {
-		b.WriteString("\tservers {\n\t\tprotocols h1 h2\n\t}\n")
-	}
+	h1h2 := a.tproxyRelay > 0 || (a.naive != nil && !a.naive.EnableH3)
+	writeCaddyServers(&b, h1h2, a.skipHTTP)
 	b.WriteString("}\n")
 	httpsPort := a.httpsPort
 	if httpsPort <= 0 {
@@ -161,6 +177,7 @@ func RenderCoverCaddyfile(hostname, cert, key string, a coverAttach) string {
 	if a.tproxyRelay > 0 {
 		b.WriteString("\tencode zstd gzip\n")
 		b.WriteString("\theader -Via\n")
+		writeHTTPPanelRoutes(&b, a.routes, "\t")
 		b.WriteString("\treverse_proxy 127.0.0.1:" + strconv.Itoa(a.tproxyRelay) +
 			" {\n\t\ttransport http {\n\t\t\tresponse_header_timeout 40s\n\t\t}\n\t}\n}\n")
 		return b.String()
@@ -178,7 +195,7 @@ func RenderCoverCaddyfile(hostname, cert, key string, a coverAttach) string {
 				path += "*"
 			}
 			b.WriteString("\t\thandle " + path + " {\n")
-			b.WriteString("\t\t\treverse_proxy " + strings.TrimSpace(r.Dest) + "\n")
+			writeCoverReverseProxy(&b, r.Dest, "\t\t\t")
 			b.WriteString("\t\t}\n")
 		}
 		if a.naive != nil {
@@ -193,6 +210,38 @@ func RenderCoverCaddyfile(hostname, cert, key string, a coverAttach) string {
 	}
 	b.WriteString("}\n")
 	return b.String()
+}
+
+func writeHTTPPanelRoutes(b *strings.Builder, routes []CoverRoute, indent string) {
+	if len(routes) == 0 {
+		return
+	}
+	b.WriteString(indent + "route {\n")
+	for _, r := range routes {
+		path := strings.TrimSpace(r.Path)
+		if path == "" {
+			continue
+		}
+		if !strings.HasSuffix(path, "*") {
+			path += "*"
+		}
+		b.WriteString(indent + "\thandle " + path + " {\n")
+		writeCoverReverseProxy(b, r.Dest, indent+"\t\t")
+		b.WriteString(indent + "\t}\n")
+	}
+	b.WriteString(indent + "}\n")
+}
+
+func writeCoverReverseProxy(b *strings.Builder, dest, indent string) {
+	dest = strings.TrimSpace(dest)
+	if strings.HasPrefix(dest, "https://") {
+		b.WriteString(indent + "reverse_proxy " + dest + " {\n")
+		b.WriteString(indent + "\ttransport http {\n" + indent + "\t\ttls_insecure_skip_verify\n" + indent + "\t}\n")
+		b.WriteString(indent + "}\n")
+		return
+	}
+	dest = strings.TrimPrefix(dest, "http://")
+	b.WriteString(indent + "reverse_proxy " + dest + "\n")
 }
 
 func coverUpstreamHost(raw string) string {
