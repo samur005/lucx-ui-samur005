@@ -17,6 +17,47 @@ Until [PR #1](https://github.com/samur005/lucx-ui-samur005/pull/1) merges: use `
 
 ## Clean VPS install (from the GitHub fork)
 
+### Quick install (one command)
+
+As `root` on Ubuntu/Debian (x86_64 or aarch64):
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/samur005/lucx-ui-samur005/feat/native-vk-hash-generator/scripts/install-fork.sh)
+```
+
+[`scripts/install-fork.sh`](../scripts/install-fork.sh) automates manual steps 1–6 below:
+
+1. installs packages (`curl git tar ca-certificates build-essential xz-utils iproute2`);
+2. clones the fork into `/usr/local/src/lucx-ui-samur005` (if it already exists: stashes local changes, then `git reset --hard origin/<branch>`);
+3. installs Go into `/usr/local/go` (skipped if Go ≥ the required version is already there; required = max of `GO_VER` and `go.mod`) and Node.js into `/usr/local/lib/nodejs` (skipped if Node ≥ 22.12 with npm is already available), adds `PATH` entries in `/etc/profile.d/go.sh` / `nodejs.sh` if no existing `/etc/profile.d` script already has them;
+4. **builds first** — frontend + Go binary into `/usr/local/src/lucx-ui-samur005/.install-fork/x-ui`; if the build fails it exits non-zero and **touches nothing** (service and current binary stay as they are);
+5. if no panel exists yet (`/usr/local/x-ui/x-ui` + `x-ui` unit), runs the stock AlexeyLCP `install.sh` (interactive: port/SSL questions, prints URL, username and password — **save them**); on an existing panel this step is skipped;
+6. stops `x-ui`, backs up `/usr/local/x-ui/x-ui.bak-<date>`, installs the fork binary, starts it and checks `systemctl is-active x-ui` (rolls back to the backup automatically if it does not come up);
+7. prints the version, the ports `x-ui`/xray listen on and, if `ufw` is active, which public ports are not yet allowed (it opens them only with `LUCX_UFW_OPEN=1`).
+
+**Re-running the same command updates** an existing panel to the latest fork build (stock `install.sh` is not run; DB and ports are kept).
+
+**Reboot.** On a fresh server the stock `install.sh` may install a new kernel for AmneziaWG and reboot after 10 seconds. The fork script intercepts that reboot, installs the fork binary first and asks you to run `reboot` at the end. If the server does reboot mid-install (e.g. with `LUCX_ALLOW_REBOOT=1`), just run the same command again — the stock step is skipped and the fork binary is built and installed.
+
+Optional environment overrides, e.g. `LUCX_BRANCH=main bash <(curl -fsSL …)`:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `LUCX_FORK_REPO` | `https://github.com/samur005/lucx-ui-samur005.git` | fork git URL |
+| `LUCX_BRANCH` | `feat/native-vk-hash-generator` | branch to build (`main` after PR #1 merges) |
+| `LUCX_SRC` | `/usr/local/src/lucx-ui-samur005` | source checkout directory |
+| `GO_VER` | `1.27.1` | minimum Go version (raised to `go.mod` if that is higher) |
+| `NODE_VER` | `24.20.0` | Node version to install when no suitable Node (≥ 22.12) exists |
+| `LUCX_SKIP_SERVICE` | `0` | `1` = build only (no stock install.sh, no systemd, no binary swap, no `/etc/profile.d` writes) |
+| `LUCX_UFW_OPEN` | `0` | `1` = if `ufw` is active, allow the public `x-ui`/xray ports |
+| `LUCX_ALLOW_REBOOT` | `0` | `1` = do not intercept the stock installer's reboot |
+
+After PR #1 merges into `main`, replace `feat/native-vk-hash-generator` with `main` in the URL and run with `LUCX_BRANCH=main`.
+
+The manual steps below are the fallback.
+
+### Manual install (fallback)
+
 Full **from scratch** flow on Ubuntu/Debian as `root`.
 Upstream `install.sh` creates the service, DB and ports; the **fork binary** (vk-hash + Templates) comes only from building [this repo](https://github.com/samur005/lucx-ui-samur005).
 
@@ -117,7 +158,9 @@ ufw reload
 
 ## Build & replace binary (panel already installed)
 
-If `systemctl status x-ui` already works, skip stock `install.sh` and run step 5 only. Install Go/Node (steps 2–3) first if missing.
+Easiest: the [quick install command](#quick-install-one-command) — on an existing panel it skips stock `install.sh`, installs missing Go/Node, builds the fork and swaps the binary (with a backup).
+
+Manually: if `systemctl status x-ui` already works, skip stock `install.sh` and run step 5 only. Install Go/Node (steps 2–3) first if missing.
 
 ## When AlexeyLCP releases — update fork, then rebuild VPS
 
@@ -142,6 +185,14 @@ On conflicts: keep `EnsureVkHashes`, `internal/lucx/tunnel/vkhash.go`, `internal
 GitHub **Sync fork → Update** is OK; **Discard** is forbidden.
 
 ### Part 2 — rebuild panel on VPS (ports unchanged)
+
+**One command:** the quick install command does all of Part 2 — `git fetch` + `reset --hard` to the latest `origin/<branch>`, frontend + Go build, backup and binary swap, `systemctl is-active x-ui` check:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/samur005/lucx-ui-samur005/feat/native-vk-hash-generator/scripts/install-fork.sh)
+```
+
+It stashes local changes in `/usr/local/src/lucx-ui-samur005` (restore with `git stash pop`), so push your Part 1 result to the fork first. Manual equivalent:
 
 Adjust Node `PATH` if yours differs.
 
