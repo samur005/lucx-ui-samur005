@@ -92,11 +92,13 @@ if ! have "csqtt-linux-${ARCH}"; then
     rm -rf /tmp/csqtt
 fi
 
+rm -f "${DEST}/qwdtt-linux-${ARCH}"
 if ! have "qwdtt-linux-${ARCH}"; then
     git init -q /tmp/qwdtt
     git -C /tmp/qwdtt remote add origin https://github.com/SpaceNeuroX/proxy-turn-vk-android.git
     git -C /tmp/qwdtt fetch -q --depth 1 origin a296c57eaba69bb9479a24f9157856490890e47d
     git -C /tmp/qwdtt checkout -q FETCH_HEAD
+    git -C /tmp/qwdtt apply "${ROOT}/third_party/patches/qwdtt-subnet.patch"
     (
         cd /tmp/qwdtt
         GOTOOLCHAIN=auto CGO_ENABLED=0 GOOS=linux GOARCH="${ARCH}" go build -trimpath -ldflags="-s -w" -o "${DEST}/qwdtt-linux-${ARCH}" ./server
@@ -161,11 +163,15 @@ if ! have "anytls-linux-${ARCH}"; then
     rm -rf /tmp/anytls
 fi
 
-# Caddy L4 SNI mux. PIN: caddy v2.11.4 (l4 42db5690 needs it; naive stays 2.11.2).
+# Caddy L4 SNI mux — merged build: l4 routing + forwardproxy (naive/cover
+# sites live inside the gateway Caddyfile) + caddylucx l4chan bridge.
+# PIN: caddy v2.11.4 (l4 42db5690 needs it; naive sidecar stays 2.11.2).
 if ! have "caddy-layer4-linux-${ARCH}"; then
     go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.7
     CGO_ENABLED=0 GOOS=linux GOARCH="${ARCH}" "$(go env GOPATH)/bin/xcaddy" build v2.11.4 \
         --with github.com/mholt/caddy-l4@42db5690dea199f930a6f08005fe2e4aab10dcc9 \
+        --with github.com/caddyserver/forwardproxy=github.com/klzgrad/forwardproxy@d62c80d3dd2c706b6b87579844d2397bddd18317 \
+        --with "github.com/lucx-ui/caddylucx=${ROOT}/caddylucx" \
         --output "${DEST}/caddy-layer4-linux-${ARCH}"
     chmod +x "${DEST}/caddy-layer4-linux-${ARCH}"
 fi

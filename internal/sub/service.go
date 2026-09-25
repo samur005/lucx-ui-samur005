@@ -3494,10 +3494,7 @@ func (s *SubService) genNaiveLink(inbound *model.Inbound, email string) string {
 	}
 	pair := tunnel.InboundAuthPair(secret, inbound, email)
 	if joined := s.sidecarHostLinks(inbound, email, func(dest string, port int, remark string) string {
-		one := cfg
-		one.Domain = dest
-		one.Port = port
-		return one.ClientURLFor(pair, remark)
+		return cfg.ClientURLAt(pair, dest, port, remark)
 	}); joined != "" {
 		return joined
 	}
@@ -3602,14 +3599,7 @@ func (s *SubService) genTrustTunnelLink(inbound *model.Inbound, email string) st
 	}
 	pair := tunnel.InboundAuthPair(secret, inbound, email)
 	ttLines := func(addr, remark string) string {
-		var links []string
-		if dl := cfg.ClientDeepLink(addr, pair, remark); dl != "" {
-			links = append(links, dl)
-		}
-		if uri := cfg.ClientURI(addr, pair, remark); uri != "" {
-			links = append(links, uri)
-		}
-		return strings.Join(links, "\n")
+		return strings.Join(cfg.ShareLines(addr, pair, remark), "\n")
 	}
 	if joined := s.sidecarHostLinks(inbound, email, func(dest string, port int, remark string) string {
 		return ttLines(net.JoinHostPort(dest, strconv.Itoa(port)), remark)

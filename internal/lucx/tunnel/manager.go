@@ -318,10 +318,10 @@ func (m *Manager) Remove(key string) {
 			}
 		}
 		mc.fp = ""
+		removeManagedFiles(key)
 		mc.opMu.Unlock()
 	}
 	clearQwdttRoutingForKey(key)
-	removeManagedFiles(key)
 }
 
 // removeManagedFiles deletes on-disk configs/data for multi-instance keys.
@@ -680,6 +680,10 @@ func (m *Manager) ReconcileTproxyCaddy(want []Instance) {
 
 func (m *Manager) ReconcileCover(want []Instance) {
 	m.ReconcileWanted(Cover, "cover-", string(Cover), want)
+}
+
+func (m *Manager) ReconcileGateway(want []Instance) {
+	m.ReconcileWanted(Gateway, "gateway-", string(Gateway), want)
 }
 
 // ReconcileWanted Ensures each wanted instance of core and Removes orphan

@@ -211,7 +211,7 @@ func TestTproxyEnsureSecretStable(t *testing.T) {
 
 func TestRenderTproxyCaddyfile(t *testing.T) {
 	got := RenderTproxyCaddyfile("proxy.example.com", 443, "/c.pem", "/k.pem", 24002, false, nil)
-	for _, need := range []string{"admin off", "auto_https off", "proxy.example.com:443", "tls", "reverse_proxy 127.0.0.1:24002", "response_header_timeout 40s"} {
+	for _, need := range []string{"admin off", "auto_https off", "proxy.example.com:443", "tls", "reverse_proxy 127.0.0.1:24002", "header_down -Via", "header_down Server \"nginx\"", "response_header_timeout 40s"} {
 		if !strings.Contains(got, need) {
 			t.Fatalf("caddyfile missing %q:\n%s", need, got)
 		}
@@ -219,6 +219,9 @@ func TestRenderTproxyCaddyfile(t *testing.T) {
 	loop := RenderTproxyCaddyfile("proxy.example.com", 8443, "/c.pem", "/k.pem", 24002, true, nil)
 	if !strings.Contains(loop, "bind 127.0.0.1") || !strings.Contains(loop, "proxy_protocol") {
 		t.Fatalf("loopback bind:\n%s", loop)
+	}
+	if !strings.Contains(loop, "protocols h1 h2") {
+		t.Fatalf("loopback tproxy must pin h1/h2:\n%s", loop)
 	}
 	if strings.Contains(got, "proxy_protocol") {
 		t.Fatalf("public tproxy should not wrap PROXY:\n%s", got)

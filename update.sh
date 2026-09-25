@@ -1265,6 +1265,17 @@ update_x-ui() {
     # Never fatal.
     setup_fail2ban
 
+    # LUCX-HOOK: AWG after panel start (no-op when pin matches). Never fatal.
+    # Absolute path: SSL/acme `cd ~` leaves cwd at /root, so relative bin/ skips.
+    local awg_installer="${xui_folder}/bin/install-awg-module.sh"
+    if [[ -x "${awg_installer}" ]]; then
+        echo -e "${green}Checking AmneziaWG kernel module...${plain}"
+        bash "${awg_installer}" || echo -e "${red}AWG install failed — AWG inbounds will be unavailable until manually fixed.${plain}"
+    else
+        echo -e "${red}AWG installer missing at ${awg_installer}${plain}"
+    fi
+    # END LUCX-HOOK
+
     echo -e "${green}x-ui ${tag_version}${plain} updating finished, it is running now..."
     echo -e ""
     echo -e "┌───────────────────────────────────────────────────────┐
@@ -1285,6 +1296,12 @@ update_x-ui() {
 │  ${blue}x-ui install${plain}      - Install                          │
 │  ${blue}x-ui uninstall${plain}    - Uninstall                        │
 └───────────────────────────────────────────────────────┘"
+    # LUCX-HOOK: never auto-reboot on update (web update looked hung).
+    if [[ -f /etc/x-ui/.awg-reboot-needed ]]; then
+        echo -e ""
+        echo -e "${yellow}AWG: reboot required so the new kernel module loads. Reboot when convenient.${plain}"
+    fi
+    # END LUCX-HOOK
 }
 
 echo -e "${green}Running...${plain}"

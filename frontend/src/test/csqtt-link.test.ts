@@ -1,3 +1,9 @@
+// Copyright (c) 2025 LucX-UI Project.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
+// LucX-UI Component. Free for personal and educational use.
+// Commercial use (including VPN resale) requires explicit written permission from the author.
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 import { describe, it, expect } from 'vitest';
 import { genCsqttLink, genInboundLinks, genLink } from '@/lib/xray/inbound-link';
 import type { Inbound } from '@/schemas/api/inbound';
@@ -11,7 +17,7 @@ function csqttInbound(over: Record<string, unknown> = {}): Inbound {
       listenAddr: '0.0.0.0:46000',
       password: 'secret',
       subHost: '1.2.3.4',
-      vkHashes: 'h1,h2',
+      vkHashes: 'abcdefghijklmnop1,abcdefghijklmnop2',
       ...((over.settings as object) || {}),
     },
     streamSettings: {},
@@ -28,7 +34,8 @@ describe('genCsqttLink', () => {
     expect(link).toContain('host=1.2.3.4');
     expect(link).toContain('peer=46000');
     expect(link).toContain('password=secret');
-    expect(link).toContain('hashes=h1%2Bh2');
+    expect(link).toContain('hashes=abcdefghijklmnop1+abcdefghijklmnop2');
+    expect(link).not.toContain('%2B');
     expect(link.includes('\n')).toBe(false);
     expect(link).not.toContain('qwdtt://');
   });

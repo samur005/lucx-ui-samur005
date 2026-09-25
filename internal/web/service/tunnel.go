@@ -341,6 +341,10 @@ func (s *TunnelService) DownloadBinary(downloadURL, wantSHA256 string) error {
 // cron job and after panel boot. A crashed core is revived; a disabled one
 // stays down.
 func (s *TunnelService) Reconcile() {
+	s.inboundService.ReleaseMaskedNaive()
+	if s.inboundService.BindAppliedRealityDest() {
+		_ = (&XrayService{inboundService: s.inboundService}).RestartXray(false)
+	}
 	s.inboundService.sweepOrphanGatewayHosts()
 	s.reconcileNaiveInbounds()
 	s.reconcileOlcrtcInbounds()
@@ -351,6 +355,7 @@ func (s *TunnelService) Reconcile() {
 	s.reconcileAnytlsInbounds()
 	s.reconcileTproxyInbounds()
 	s.reconcileCoverInbounds()
+	s.reconcileGatewayInbounds()
 }
 
 // tunnelBlobMigrated reports whether the legacy settings blob carries the
@@ -421,7 +426,8 @@ func (s *TunnelService) reconcileNaiveInbounds() {
 		if !ok {
 			continue
 		}
-		if tunnel.NaiveFrontedByCover(ib, inbounds, secret, panelCert, panelKey) {
+		if tunnel.GatewayAbsorbed(ib, inbounds) ||
+			tunnel.NaiveFrontedByCover(ib, inbounds, secret, panelCert, panelKey) {
 			inst.Enabled = false
 		}
 		want = append(want, inst)
@@ -636,6 +642,9 @@ func (s *TunnelService) reconcileTproxyInbounds() {
 			case tunnel.Mtproxy:
 				mtps = append(mtps, inst)
 			case tunnel.TproxyCaddy:
+				if tunnel.GatewayAbsorbed(ib, inbounds) {
+					inst.Enabled = false
+				}
 				caddies = append(caddies, inst)
 			}
 		}
@@ -676,9 +685,34 @@ func (s *TunnelService) reconcileCoverInbounds() {
 		if !ok {
 			continue
 		}
+		if tunnel.GatewayAbsorbed(ib, inbounds) {
+			inst.Enabled = false
+		}
 		want = append(want, inst)
 	}
 	tunnel.GetManager().ReconcileCover(want)
+}
+
+func (s *TunnelService) reconcileGatewayInbounds() {
+	secret, _ := s.settingService.GetSecret()
+	panelCert, panelKey := panelCertFiles()
+	inbounds, err := s.inboundService.GetAllInbounds()
+	if err != nil {
+		logger.Warning("tunnel: gateway inbound list failed:", err)
+		return
+	}
+	var want []tunnel.Instance
+	for _, ib := range inbounds {
+		if ib == nil || ib.Protocol != model.Gateway || ib.NodeID != nil {
+			continue
+		}
+		inst, ok := tunnel.GatewayInstanceFromInbound(ib, inbounds, secret, panelCert, panelKey)
+		if !ok {
+			continue
+		}
+		want = append(want, inst)
+	}
+	tunnel.GetManager().ReconcileGateway(want)
 }
 
 // panelCertFiles reads the panel ACME certificate paths from settings (the

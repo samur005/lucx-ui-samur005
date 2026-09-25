@@ -69,8 +69,6 @@ git_clone_sha() {
     local repo tmp
     repo="${url#https://github.com/}"
     repo="${repo%.git}"
-    rm -rf "$dest"
-    mkdir -p "$dest"
     tmp="$(mktemp /tmp/awg-src-XXXXXX.tar.gz)"
     export GIT_TERMINAL_PROMPT=0
     export GIT_ASKPASS=/bin/true
@@ -78,6 +76,8 @@ git_clone_sha() {
         if curl -fsSL --retry 5 --retry-delay 2 --connect-timeout 20 --max-time 180 \
             -o "$tmp" "https://codeload.github.com/${repo}/tar.gz/${sha}" \
             && tar -tzf "$tmp" >/dev/null 2>&1; then
+            rm -rf "$dest"
+            mkdir -p "$dest"
             tar -C "$dest" --strip-components=1 -xzf "$tmp"
             rm -f "$tmp"
             return 0
@@ -85,6 +85,8 @@ git_clone_sha() {
         if curl -fsSL --retry 5 --retry-delay 2 --connect-timeout 20 --max-time 180 \
             -o "$tmp" "https://github.com/${repo}/archive/${sha}.tar.gz" \
             && tar -tzf "$tmp" >/dev/null 2>&1; then
+            rm -rf "$dest"
+            mkdir -p "$dest"
             tar -C "$dest" --strip-components=1 -xzf "$tmp"
             rm -f "$tmp"
             return 0
@@ -249,21 +251,184 @@ open(path, "w", encoding="utf-8", errors="surrogateescape").write(new)
 PY
 }
 
+# True when the kernel headers already declare timer_delete(). A static
+# wrapper then conflicts (Ubuntu 22.04 5.15.0-194). Older 5.15 (0-82) has
+# no declaration and needs the del_timer wrap.
+kernel_declares_timer_delete() {
+    local kver="${1:-$(uname -r)}"
+    local hdr="/lib/modules/${kver}/build/include/linux/timer.h"
+    [[ -f "$hdr" ]] && grep -qE 'timer_delete[[:space:]]*\(' "$hdr"
+}
+
 # Upstream compat skips timer_delete() on ISUBUNTU2204, assuming a 5.15
-# backport. 5.15.0-82-generic has none → implicit declaration, DKMS fails,
-# old module left in place. Drop that exception so the del_timer wrapper
-# applies. No-op if the line is already gone.
+# backport. 5.15.0-82-generic has none → implicit declaration, DKMS fails.
+# Drop that exception only when this kernel's headers do not declare it.
+# 5.15.0-194 and 5.4.0-216 do declare it; a static wrapper conflicts.
 apply_timer_delete_compat() {
     local f="${1:-compat/compat.h}"
+    local kver="${2:-$(uname -r)}"
     if [[ ! -f "$f" ]]; then
+        return 0
+    fi
+    if kernel_declares_timer_delete "$kver"; then
+        echo -e "${GREEN}timer_delete есть в заголовках ${kver} — обёртку не ставим.${NC}"
         return 0
     fi
     if ! grep -qF 'KERNEL_VERSION(6, 1, 91) && !defined(ISUBUNTU2004) && !defined(ISUBUNTU2204)' "$f"; then
         echo -e "${GREEN}timer_delete compat already patched — skip.${NC}"
         return 0
     fi
-    echo -e "${YELLOW}Патч timer_delete (Ubuntu 22.04 5.15 без бэкпорта)...${NC}"
+    echo -e "${YELLOW}Патч timer_delete (ядро ${kver} без timer_delete)...${NC}"
     sed -i 's/KERNEL_VERSION(6, 1, 91) && !defined(ISUBUNTU2004) && !defined(ISUBUNTU2204) && !defined(ISRHEL9)/KERNEL_VERSION(6, 1, 91) \&\& !defined(ISUBUNTU2004) \&\& !defined(ISRHEL9)/' "$f"
+}
+
+# AWG 3 header protection needs the ChaCha library API
+# (chacha_init / chacha20_crypt on u32 state). That API exists from Linux 5.5.
+# 5.4 (Ubuntu 20.04) still ships the skcipher header, so the <6.16 struct
+# wrapper calls functions that are not there → DKMS dies in main.o.
+# Zinc is built into the module on kernels < 5.10, which covers < 5.5.
+# Upstream PR amnezia-vpn/amneziawg-linux-kernel-module#244. No-op once merged.
+apply_chacha_lib_compat() {
+    local f="${1:-compat/compat.h}"
+    if [[ ! -f "$f" ]]; then
+        return 0
+    fi
+    if grep -qF 'CHACHA20_CONSTANT_EXPA' "$f" 2>/dev/null; then
+        echo -e "${GREEN}chacha library compat already in tree — skip.${NC}"
+        return 0
+    fi
+    if ! grep -qF '(chacha_init)(state->x, key, iv)' "$f" 2>/dev/null; then
+        echo -e "${GREEN}chacha library wrappers absent — skip.${NC}"
+        return 0
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo -e "${YELLOW}python3 нет — патч chacha library пропущен (ядра < 5.5 не соберутся).${NC}"
+        return 0
+    fi
+    echo -e "${YELLOW}Патч chacha library (ядро < 5.5, PR #244)...${NC}"
+    python3 - "$f" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8", errors="surrogateescape").read()
+old = """\
+static inline void __compat_chacha_init(struct chacha_state *state,
+					const u32 *key,
+					const u8 *iv)
+{
+	(chacha_init)(state->x, key, iv);
+}
+#define chacha_init(state, key, iv) __compat_chacha_init((state), (key), (iv))
+
+static inline void __compat_chacha20_crypt(struct chacha_state *state,
+					       u8 *dst, const u8 *src,
+					       unsigned int bytes)
+{
+	(chacha20_crypt)(state->x, dst, src, bytes);
+}
+#define chacha20_crypt(s, d, src, b) __compat_chacha20_crypt((s),(d),(src),(b))
+"""
+new = """\
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 5, 0)
+#include <linux/string.h>
+#include <zinc/chacha20.h>
+static inline void __compat_chacha_init(struct chacha_state *state,
+					const u32 *key,
+					const u8 *iv)
+{
+	state->x[0] = CHACHA20_CONSTANT_EXPA;
+	state->x[1] = CHACHA20_CONSTANT_ND_3;
+	state->x[2] = CHACHA20_CONSTANT_2_BY;
+	state->x[3] = CHACHA20_CONSTANT_TE_K;
+	state->x[4] = key[0];
+	state->x[5] = key[1];
+	state->x[6] = key[2];
+	state->x[7] = key[3];
+	state->x[8] = key[4];
+	state->x[9] = key[5];
+	state->x[10] = key[6];
+	state->x[11] = key[7];
+	state->x[12] = get_unaligned_le32(iv + 0);
+	state->x[13] = get_unaligned_le32(iv + 4);
+	state->x[14] = get_unaligned_le32(iv + 8);
+	state->x[15] = get_unaligned_le32(iv + 12);
+}
+static inline void __compat_chacha20_crypt(struct chacha_state *state,
+					       u8 *dst, const u8 *src,
+					       unsigned int bytes)
+{
+	struct chacha20_ctx ctx;
+
+	memcpy(ctx.state, state->x, sizeof(ctx.state));
+	chacha20(&ctx, dst, src, bytes, DONT_USE_SIMD);
+	memcpy(state->x, ctx.state, sizeof(ctx.state));
+}
+#else
+static inline void __compat_chacha_init(struct chacha_state *state,
+					const u32 *key,
+					const u8 *iv)
+{
+	(chacha_init)(state->x, key, iv);
+}
+static inline void __compat_chacha20_crypt(struct chacha_state *state,
+					       u8 *dst, const u8 *src,
+					       unsigned int bytes)
+{
+	(chacha20_crypt)(state->x, dst, src, bytes);
+}
+#endif
+#define chacha_init(state, key, iv) __compat_chacha_init((state), (key), (iv))
+#define chacha20_crypt(s, d, src, b) __compat_chacha20_crypt((s),(d),(src),(b))
+"""
+if old not in text:
+    sys.stderr.write("chacha library ABI: wrapper block not found\n")
+    sys.exit(1)
+open(path, "w", encoding="utf-8", errors="surrogateescape").write(text.replace(old, new, 1))
+PY
+}
+
+# 6.19 compat includes <crypto/blake2s.h> for the state/arg rename. On
+# kernels < 5.10 Zinc still builds blake2s.o; Ubuntu 20.04 5.4.0-216 also
+# ships the kernel header → redefinition. Skip the kernel include when Zinc
+# owns blake2s. cookie.c still compiles via zinc/blake2s.h + blake2s_ctx alias.
+apply_blake2s_zinc_compat() {
+    local f="${1:-compat/compat.h}"
+    if [[ ! -f "$f" ]]; then
+        return 0
+    fi
+    if grep -A4 'KERNEL_VERSION(6, 19, 0)' "$f" 2>/dev/null | grep -qF 'KERNEL_VERSION(5, 10, 0)'; then
+        echo -e "${GREEN}blake2s zinc include already patched — skip.${NC}"
+        return 0
+    fi
+    if ! grep -qF '#include <crypto/blake2s.h>' "$f" 2>/dev/null; then
+        echo -e "${GREEN}blake2s kernel include absent — skip.${NC}"
+        return 0
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo -e "${YELLOW}python3 нет — патч blake2s zinc пропущен (ядра < 5.10 + backported blake2s не соберутся).${NC}"
+        return 0
+    fi
+    echo -e "${YELLOW}Патч blake2s include (Zinc vs kernel header на < 5.10)...${NC}"
+    python3 - "$f" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8", errors="surrogateescape").read()
+old = """\
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 19, 0)
+#include <crypto/blake2s.h>
+#define blake2s_ctx blake2s_state
+"""
+new = """\
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 19, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
+#include <crypto/blake2s.h>
+#endif
+#define blake2s_ctx blake2s_state
+"""
+if old not in text:
+    sys.stderr.write("blake2s zinc: include block not found\n")
+    sys.exit(1)
+open(path, "w", encoding="utf-8", errors="surrogateescape").write(text.replace(old, new, 1))
+PY
 }
 
 # Skip DKMS/kernel when the installed module SHA already matches AWG_KMOD_PIN
@@ -434,7 +599,7 @@ fi
 AWG_REBOOT_FLAG="/etc/x-ui/.awg-reboot-needed"
 rm -f "$AWG_REBOOT_FLAG" 2>/dev/null || true
 if [[ ! -d "/lib/modules/${RUNNING_KERNEL}/build" ]]; then
-    NEWEST_HEADERS=$(ls -d /lib/modules/*/build 2>/dev/null | head -1)
+    NEWEST_HEADERS=$(ls -d /lib/modules/*/build 2>/dev/null | sort -V | tail -1)
     if [[ -n "$NEWEST_HEADERS" ]]; then
         NEWEST_KERNEL=$(basename "$(dirname "$NEWEST_HEADERS")")
         echo -e "${YELLOW}Headers for running kernel ${RUNNING_KERNEL} missing; found ${NEWEST_KERNEL}.${NC}"
@@ -484,14 +649,6 @@ if [[ $AWG_NEED_MODULE -eq 1 ]]; then
 
     apply_udp_tunnel_abi_compat socket.c || \
         echo -e "${YELLOW}Патч udp_tunnel ABI не применился — продолжаем (ядра 7.1.5+ могут не собраться).${NC}"
-    apply_timer_delete_compat compat/compat.h || \
-        echo -e "${YELLOW}Патч timer_delete не применился — Ubuntu 22.04 5.15 может не собраться.${NC}"
-
-    # Stage the sources under the real version and compile for the booted kernel.
-    sed -i "s/^PACKAGE_VERSION=.*/PACKAGE_VERSION=\"${MOD_VER}\"/" dkms.conf
-    rm -rf "/usr/src/amneziawg-${MOD_VER}"
-    make dkms-install WIREGUARD_VERSION="${MOD_VER}" 2>/dev/null || true
-    dkms add -m amneziawg -v "${MOD_VER}" 2>/dev/null || true
     # Prefer the running kernel; if its headers are missing (meta-upgrade
     # already pulled a newer image), build for the first kernel that has
     # headers so install can finish without a mid-script reboot (lucx.122).
@@ -504,6 +661,18 @@ if [[ $AWG_NEED_MODULE -eq 1 ]]; then
             fi
         done
     fi
+    apply_timer_delete_compat compat/compat.h "$BUILD_K" || \
+        echo -e "${YELLOW}Патч timer_delete не применился — Ubuntu 22.04 5.15 может не собраться.${NC}"
+    apply_chacha_lib_compat compat/compat.h || \
+        echo -e "${YELLOW}Патч chacha library не применился — ядра < 5.5 могут не собраться.${NC}"
+    apply_blake2s_zinc_compat compat/compat.h || \
+        echo -e "${YELLOW}Патч blake2s zinc не применился — Ubuntu 20.04 5.4 может не собраться.${NC}"
+
+    # Stage the sources under the real version and compile for the booted kernel.
+    sed -i "s/^PACKAGE_VERSION=.*/PACKAGE_VERSION=\"${MOD_VER}\"/" dkms.conf
+    rm -rf "/usr/src/amneziawg-${MOD_VER}"
+    make dkms-install WIREGUARD_VERSION="${MOD_VER}" 2>/dev/null || true
+    dkms add -m amneziawg -v "${MOD_VER}" 2>/dev/null || true
     dkms build -m amneziawg -v "${MOD_VER}" -k "${BUILD_K}" || {
         echo -e "${RED}Ошибка сборки DKMS — текущий модуль не тронут.${NC}"
         mklog="/var/lib/dkms/amneziawg/${MOD_VER}/build/make.log"

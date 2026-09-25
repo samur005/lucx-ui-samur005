@@ -4,6 +4,54 @@ Extracted from AGENTS.md. This file is project law.
 
 ---
 
+### Pattern 1ao: TrustTunnel HTTP/2 listens UDP; NekoBox shows the wrong pair — FIXED (lucx.267)
+
+- **Symptom (VladufQa, 24.09.2026):** HTTP/2 picker → NekoBox shows HTTP and QUIC, and the port listens UDP. HTTP/3 picker → QUIC and QUIC. Wanted: HTTP/2 = one HTTPS listener; HTTP/3 = HTTPS + QUIC.
+- **Cause:** `RenderVpnToml` always wrote `[listen_protocols.quic]`. TLV omitted `upstream_protocol` on HTTP/2; NekoBox treated `tt://?` without that tag as QUIC. HTTP/3 tagged both share lines as h3.
+- **Fix:** QUIC listen only when upstream is http3 (TCP stays). TLV always sets protocol 1 or 2. HTTP/3 share emits https and quic, each as TLV and Throne URI.
+- **Healing:** save the inbound (rewrites vpn.toml) and refresh the subscription.
+
+### Pattern 1an: Naive on the 443 mux times out — FIXED (lucx.266)
+
+- **Symptom:** Apply masking, Naive has no traffic, client timeout. Unticked, Apply says Naive still occupies :443.
+- **Cause:** naive-client SNI is the URL host and HTTP/3 does not survive a TCP-only mux. Default port is 443, so leaving it public also loses the bind to the gateway.
+- **Fix:** Classify Naive as public. Apply moves it off 443, opens that port, does not write a gateway Host. Reconcile releases a Naive already in the snapshot. Refresh the subscription.
+- **Lesson:** do not put a protocol on the SNI mux when the client cannot send a different SNI than the host it dials.
+
+### Pattern 1am: CSQTT hashes in the panel, no connect — FIXED (lucx.265)
+- **Symptom (VladufQa, 23.09.2026):** CSQTT inbound with VK hashes set does not connect. Same hashes on qWDTT connect.
+- **Cause:** Android `parseLinkHashes` splits the raw `hashes` query on `+` before percent-decode. Panel encoded the separator as `%2B`, so the list arrived as one hash. qWDTT wants commas and decodes first.
+- **Fix:** share and `/sub/` emit `hashes=h1+h2` (raw `+`). `%2B` stays only for a plus inside one hash.
+- **Healing without update:** delete the hashes field, re-import, or hand-edit the link: replace `%2B` between hashes with `+`.
+- **Lesson:** a client that splits before decode does not want `url.Values.Encode` on that separator.
+
+### Pattern 1al: Masking public host is a REALITY decoy; page resets while typing — FIXED (lucx.263)
+- **Symptom (VladufQa, 22.09.2026):** public host shows `wwwqa.microsoft.com` instead of the panel/Cover domain. VLESS link times out; manual panel SNI + port 443 works. Typing the host refreshes after each character. Naive listen stays on its old port, so UFW close kills it. Apply: `inbound "" still occupies TCP :443`.
+- **Cause:** empty public host fell through to the first classified SNI (REALITY dest). Preview query key included the field, so each keystroke unmounted the form. Client port (`Host :443`) was not shown; panel naive export used the loopback port. Empty remark made the occupy error useless.
+- **Fix:** resolve host as request → saved (unless it is that decoy) → panel domain → Cover hostname. Local input state. Listen shows `· :443`. Export uses the gateway Host port.
+- **Healing without update:** type is broken on this build — set the Cover hostname in the inbound, or edit the client to panel domain:443. Do not Apply while the field shows a decoy.
+
+### Pattern 1ak: naive behind Masking, share `?sni=` ignored — FIXED (lucx.258)
+- **Symptom (VladufQa):** openssl to naive SNI works; NekoBox/sub link times out. `naive-client` on the stand: Domain host → 200; publicHost and `?sni=` → fail.
+- **Cause:** lucx.253 wrote Masking Host (`vladnl.work.gd`) as URL host and `sni=inbound.domain`. klzgrad naiveproxy has no `?sni=`; SNI = publicHost → L4 to WEB proxy, not naive.
+- **Fix:** `ClientURLAt` URL host = inbound Domain, port from Host (443). No `?sni=`.
+- **Healing without update:** paste `naive+https://user:pass@<naive-domain>:443` (not the public cover host).
+- **Lesson:** do not invent query params the client binary does not implement.
+
+### Pattern 1aj: Masking L4 `aborted matching according to timeout` — FIXED (lucx.257)
+- **Symptom (VladufQa, 21.09.2026):** openssl/curl to naive SNI work; phone NekoBox → timeout. Log: `layer4 matching connection … aborted matching according to timeout`.
+- **Cause:** caddy-l4 waits for a TLS ClientHello before SNI routing. Default `matching_timeout` is 3s. Slow/mobile/fragmented hello never matches; catch-all never runs.
+- **Fix:** `matching_timeout 15s` in the gateway Caddyfile.
+- **Healing without update:** none — Caddyfile is rewritten on reconcile.
+- **Lesson:** an SNI mux that peeks TLS cannot use a LAN-sized match deadline on WAN clients.
+
+### Pattern 1ai: naive behind Masking, SNI → timeout — FIXED (lucx.256)
+- **Symptom (VladufQa, 21.09.2026):** naive up behind SNI gateway. No extra SNI → TCP CONNECT works. With SNI → client timeout.
+- **Cause:** Masking remaps naive to `127.0.0.1:54807`. `enableH3` (default) makes Caddy send `Alt-Svc: h3=":54807"`. L4 muxes TCP 443 only. NekoBox/Chromium QUIC to public `:54807` never falls back (same as Pattern 1ab).
+- **Fix:** `writeCaddyServers` pins `protocols h1 h2` whenever PROXY/loopback is on (naive, cover, tproxy).
+- **Healing without update:** turn off HTTP/3 on the naive inbound, save.
+- **Lesson:** a TCP-only front must not advertise HTTP/3 on the backend’s private port.
+
 ### Pattern 1ah: CSQTT “password already assigned to another Device ID” after delete/recreate — FIXED (lucx.243)
 - **Symptom (zk0xch, 17.09.2026):** first inbound + iPhone import works. Delete inbound, create again, import — client says the password belongs to another device_id. New password in the card does not help. Restoring the *first* device_id on the phone works with any password.
 - **Cause:** CSQTT is a singleton key (`csqtt`). `Remove` stopped the process but `removeManagedFiles` skipped singleton data dirs. `csqtt.db` kept `main_device_id`. `--password` overwrites the password; empty `--device-id` does **not** clear the stored id. iOS re-import mints a new device_id.
