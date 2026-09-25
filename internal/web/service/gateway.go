@@ -9,21 +9,25 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
+	"github.com/mhsanaei/3x-ui/v3/internal/logger"
 	"github.com/mhsanaei/3x-ui/v3/internal/lucx/tunnel"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/common"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/random"
 )
 
 type GatewayApplyRequest struct {
-	Selected   []int  `json:"selected"`
-	Steal      []int  `json:"steal"`
-	PublicHost string `json:"publicHost"`
-	UFW        bool   `json:"ufw"`
-	HidePanel  bool   `json:"hidePanel"`
+	Selected   []int             `json:"selected"`
+	Steal      []int             `json:"steal"`
+	PublicHost string            `json:"publicHost"`
+	UFW        bool              `json:"ufw"`
+	HidePanel  bool              `json:"hidePanel"`
+	HideNaive  []int             `json:"hideNaive"`
+	SNI        map[string]string `json:"sni"`
 }
 
 type GatewayPreviewResult struct {
@@ -35,6 +39,8 @@ type GatewayPreviewResult struct {
 	UFW        bool                `json:"ufw"`
 	UFWAllow   []string            `json:"ufwAllow,omitempty"`
 	HidePanel  bool                `json:"hidePanel"`
+	WebPort    int                 `json:"webPort,omitempty"`
+	WebTLS     bool                `json:"webTLS,omitempty"`
 }
 
 func (s *InboundService) GatewayPreview(gatewayID int, publicHost string) (*GatewayPreviewResult, error) {
@@ -44,7 +50,7 @@ func (s *InboundService) GatewayPreview(gatewayID int, publicHost string) (*Gate
 	}
 	cfg, _ := tunnel.GatewayConfigFromInbound(gw)
 	if publicHost == "" {
-		publicHost = cfg.PublicHost
+		publicHost = tunnel.ResolveGatewayPublicHost("", cfg.PublicHost, panelPublicHost(), others)
 	}
 	bindIP := cfg.BindIP
 	if bindIP == "" {
@@ -56,6 +62,7 @@ func (s *InboundService) GatewayPreview(gatewayID int, publicHost string) (*Gate
 	}
 	rows := tunnel.BuildPreview(gw.Port, publicHost, others, bindIP)
 	web, sub := gatewayExtraPorts()
+	cert, _ := (&SettingService{}).GetCertFile()
 	return &GatewayPreviewResult{
 		Applied:    cfg.Applied(),
 		PublicHost: publicHost,
@@ -65,6 +72,8 @@ func (s *InboundService) GatewayPreview(gatewayID int, publicHost string) (*Gate
 		UFW:        cfg.UFW,
 		UFWAllow:   tunnel.GatewayUFWAllow(web, sub, tunnel.SSHDPort(), rows, ufwDefaultSelected(rows), cfg.HidePanel),
 		HidePanel:  cfg.HidePanel,
+		WebPort:    web,
+		WebTLS:     strings.TrimSpace(cert) != "",
 	}, nil
 }
 
@@ -81,9 +90,8 @@ func (s *InboundService) GatewayApply(gatewayID int, req GatewayApplyRequest) er
 	for _, o := range others {
 		byID[o.Id] = o
 	}
-	host := tunnel.ResolveGatewayPublicHost(req.PublicHost, cfg.PublicHost, others)
+	host := tunnel.ResolveGatewayPublicHost(req.PublicHost, cfg.PublicHost, panelPublicHost(), others)
 	bindIP := tunnel.LocalIPv4()
-	rows := tunnel.BuildPreview(gw.Port, host, others, bindIP)
 	selected := map[int]bool{}
 	for _, id := range req.Selected {
 		selected[id] = true
@@ -94,6 +102,61 @@ func (s *InboundService) GatewayApply(gatewayID int, req GatewayApplyRequest) er
 	}
 	if len(selected) == 0 {
 		return common.NewError("gateway: nothing selected")
+	}
+	db := database.GetDB()
+	for idStr, sni := range req.SNI {
+		id, err := strconv.Atoi(idStr)
+		if err != nil || !selected[id] {
+			continue
+		}
+		ib := byID[id]
+		if ib == nil {
+			continue
+		}
+		tunnel.SetInboundSNI(ib, sni)
+		if err := db.Model(ib).Select("settings", "stream_settings").Updates(ib).Error; err != nil {
+			return err
+		}
+	}
+	if err := applyNaiveMoves(byID, tunnel.PlanNaivePublic(gw.Port, others)); err != nil {
+		return err
+	}
+	rows := tunnel.BuildPreview(gw.Port, host, others, bindIP)
+	if err := hideNaiveOnSite(byID, rows, selected, req.HideNaive); err != nil {
+		return err
+	}
+	if c := tunnel.SNIClash(rows, selected); c != "" {
+		return common.NewError("gateway: duplicate SNI", c)
+	}
+	for _, o := range others {
+		// Anything left public on TCP :443 wins the bind race with the
+		// gateway — one of them then fails to listen.
+		if o == nil || !o.Enable || selected[o.Id] || o.Port != gw.Port ||
+			tunnel.IsLoopbackListen(o.Listen) || !tunnel.InboundUsesTCP(o) {
+			continue
+		}
+		return common.NewErrorf("gateway: inbound %q still occupies TCP :%d — select it or move it off", inboundLabel(o), o.Port)
+	}
+	cert, key := gatewayPanelCertPair()
+	for _, row := range rows {
+		ib := byID[row.InboundID]
+		if !selected[row.InboundID] || row.Class != tunnel.ClassCaddy ||
+			ib == nil || ib.Protocol != model.Naive {
+			continue
+		}
+		ncfg, _ := tunnel.ConfigFromInbound(ib)
+		if !ncfg.UseAcme {
+			continue
+		}
+		// Auto TLS has no public :80/:443 to renew on once masked — point it
+		// at the panel cert when it covers the domain, else fail loudly.
+		if err := tunnel.ValidateCertFiles(cert, key, ncfg.Domain); err != nil {
+			return common.NewErrorf("gateway: %q uses Auto TLS which can't renew behind masking — set cert/key paths (panel cert doesn't cover %q)", ib.Remark, ncfg.Domain)
+		}
+		tunnel.SetNaiveCert(ib, cert, key)
+		if err := db.Model(ib).Select("settings").Updates(ib).Error; err != nil {
+			return err
+		}
 	}
 	if req.HidePanel {
 		front := false
@@ -117,7 +180,6 @@ func (s *InboundService) GatewayApply(gatewayID int, req GatewayApplyRequest) er
 		cfg.PanelRoutes = routes
 	}
 	var snap []tunnel.GatewaySnapshotRow
-	db := database.GetDB()
 	for _, row := range rows {
 		if !selected[row.InboundID] || row.Class == tunnel.ClassSkip {
 			continue
@@ -129,10 +191,12 @@ func (s *InboundService) GatewayApply(gatewayID int, req GatewayApplyRequest) er
 		sr := tunnel.GatewaySnapshotRow{InboundID: ib.Id, Listen: ib.Listen, Port: ib.Port, StreamSettings: ib.StreamSettings}
 		ib.Listen = row.NewListen
 		ib.Port = row.NewPort
-		if steal[row.InboundID] && row.StealDest != "" {
+		// Cover selected → Reality dest is the local decoy, same as the nginx
+		// script. The checkbox is not required.
+		if row.StealDest != "" && (steal[row.InboundID] || coverSelected(rows, selected)) {
 			ib.StreamSettings = tunnel.SetRealityDest(ib.StreamSettings, row.StealDest)
 		}
-		if tunnel.XrayAcceptsProxyProtocol(ib.Protocol) {
+		if !row.NoProxy && tunnel.XrayAcceptsProxyProtocol(ib.Protocol) {
 			ib.StreamSettings = tunnel.SetAcceptProxyProtocol(ib.StreamSettings, true)
 		}
 		if err := db.Model(ib).Select("listen", "port", "stream_settings").Updates(ib).Error; err != nil {
@@ -159,6 +223,7 @@ func (s *InboundService) GatewayApply(gatewayID int, req GatewayApplyRequest) er
 	cfg.Snapshot = snap
 	cfg.Routes = tunnel.RoutesFromPreview(rows, selected)
 	cfg.Fallback = tunnel.CoverFallback(rows, selected)
+	cfg.Unified = true
 	cfg.Enabled = true
 	cfg.UFW = req.UFW
 	if req.UFW {
@@ -223,6 +288,7 @@ func (s *InboundService) GatewayRevert(gatewayID int) error {
 	cfg.Snapshot = nil
 	cfg.Routes = nil
 	cfg.Fallback = ""
+	cfg.Unified = false
 	cfg.BindIP = ""
 	cfg.UFW = false
 	cfg.UFWWasActive = false
@@ -243,6 +309,13 @@ func (s *InboundService) GatewayRevert(gatewayID int) error {
 	s.sweepOrphanGatewayHosts()
 	_ = (&XrayService{inboundService: *s}).RestartXray(true)
 	return nil
+}
+
+func gatewayPanelCertPair() (cert, key string) {
+	st := SettingService{}
+	cert, _ = st.GetCertFile()
+	key, _ = st.GetKeyFile()
+	return
 }
 
 func loopbackDest(tls bool, port int) string {
@@ -311,6 +384,217 @@ func ufwDefaultSelected(rows []tunnel.PreviewRow) map[int]bool {
 }
 
 const gatewayHostRemark = "gateway"
+
+func panelPublicHost() string {
+	st := SettingService{}
+	if d, err := st.GetSubDomain(); err == nil && strings.TrimSpace(d) != "" {
+		return d
+	}
+	d, _ := st.GetWebDomain()
+	return d
+}
+
+func inboundLabel(ib *model.Inbound) string {
+	if ib == nil {
+		return ""
+	}
+	if s := strings.TrimSpace(ib.Remark); s != "" {
+		return s
+	}
+	return fmt.Sprintf("%s #%d", ib.Protocol, ib.Id)
+}
+
+func coverSelected(rows []tunnel.PreviewRow, selected map[int]bool) bool {
+	for _, row := range rows {
+		if selected[row.InboundID] && (row.Protocol == string(model.Cover) || row.Protocol == string(model.Tproxy)) {
+			return true
+		}
+	}
+	return false
+}
+
+// BindAppliedRealityDest points masked REALITY dest at the Cover loopback,
+// matching the nginx script's fallback. No client-link change. Returns true
+// if Xray must reload.
+func (s *InboundService) BindAppliedRealityDest() bool {
+	all, err := s.GetAllInbounds()
+	if err != nil {
+		return false
+	}
+	db := database.GetDB()
+	changed := false
+	for _, gw := range all {
+		cfg, ok := tunnel.GatewayConfigFromInbound(gw)
+		if !ok || !cfg.Applied() {
+			continue
+		}
+		byID := indexInbounds(all)
+		var coverPort, tproxyPort int
+		for _, sr := range cfg.Snapshot {
+			ib := byID[sr.InboundID]
+			if ib == nil || ib.Port <= 0 {
+				continue
+			}
+			if ib.Protocol == model.Cover {
+				coverPort = ib.Port
+			}
+			if ib.Protocol == model.Tproxy && tproxyPort == 0 {
+				tproxyPort = ib.Port
+			}
+		}
+		if coverPort == 0 {
+			coverPort = tproxyPort
+		}
+		if coverPort <= 0 {
+			continue
+		}
+		dest := fmt.Sprintf("127.0.0.1:%d", coverPort)
+		for _, sr := range cfg.Snapshot {
+			ib := byID[sr.InboundID]
+			if ib == nil {
+				continue
+			}
+			if !tunnel.IsRealityStream(ib.StreamSettings) {
+				continue
+			}
+			if tunnel.RealityDest(ib.StreamSettings) == dest {
+				continue
+			}
+			ib.StreamSettings = tunnel.SetRealityDest(ib.StreamSettings, dest)
+			if err := db.Model(ib).Select("stream_settings").Updates(ib).Error; err != nil {
+				logger.Warning("gateway: reality dest:", err)
+				continue
+			}
+			changed = true
+		}
+	}
+	return changed
+}
+
+func hideNaiveOnSite(byID map[int]*model.Inbound, rows []tunnel.PreviewRow, selected map[int]bool, ids []int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	host, cover := selectedSiteHost(rows, selected)
+	if host == "" {
+		return common.NewError("gateway: pick Cover or WEB proxy to hide Naive behind 443")
+	}
+	db := database.GetDB()
+	for _, id := range ids {
+		ib := byID[id]
+		if ib == nil || ib.Protocol != model.Naive {
+			continue
+		}
+		tunnel.HideNaiveOnSite(ib, host, cover)
+		if err := db.Model(&model.Inbound{}).Where("id = ?", ib.Id).Update("settings", ib.Settings).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func selectedSiteHost(rows []tunnel.PreviewRow, selected map[int]bool) (host string, cover bool) {
+	var tproxy string
+	for _, r := range rows {
+		if selected != nil && !selected[r.InboundID] {
+			continue
+		}
+		switch r.Protocol {
+		case string(model.Cover):
+			if r.SNI != "" {
+				return r.SNI, true
+			}
+		case string(model.Tproxy):
+			if r.SNI != "" && tproxy == "" {
+				tproxy = r.SNI
+			}
+		}
+	}
+	return tproxy, false
+}
+
+func applyNaiveMoves(byID map[int]*model.Inbound, moves []tunnel.NaiveMove) error {
+	if len(moves) == 0 {
+		return nil
+	}
+	cert, key := gatewayPanelCertPair()
+	db := database.GetDB()
+	for _, m := range moves {
+		ib := byID[m.ID]
+		if ib == nil {
+			continue
+		}
+		ncfg, _ := tunnel.ConfigFromInbound(ib)
+		if ncfg.UseAcme {
+			if err := tunnel.ValidateCertFiles(cert, key, ncfg.Domain); err != nil {
+				return common.NewErrorf("gateway: %q uses Auto TLS which needs port 443 — set cert/key (panel cert doesn't cover %q)", inboundLabel(ib), ncfg.Domain)
+			}
+			tunnel.SetNaiveCert(ib, cert, key)
+		}
+		m.Apply(ib)
+		if err := db.Model(&model.Inbound{}).Where("id = ?", ib.Id).Updates(map[string]any{
+			"listen":   ib.Listen,
+			"port":     ib.Port,
+			"settings": ib.Settings,
+		}).Error; err != nil {
+			return err
+		}
+		_ = db.Where("inbound_id = ? AND remark = ?", ib.Id, gatewayHostRemark).Delete(&model.Host{}).Error
+	}
+	return nil
+}
+
+// ReleaseMaskedNaive undoes a previous Apply that hid naive on loopback.
+// Called from reconcile so an update fixes it without a console.
+func (s *InboundService) ReleaseMaskedNaive() {
+	all, err := s.GetAllInbounds()
+	if err != nil {
+		return
+	}
+	db := database.GetDB()
+	for _, gw := range all {
+		if gw == nil || gw.Protocol != model.Gateway {
+			continue
+		}
+		cfg, ok := tunnel.GatewayConfigFromInbound(gw)
+		if !ok || !cfg.Applied() {
+			continue
+		}
+		next, moves, changed := tunnel.ReleaseMaskedNaive(cfg, all, gw.Port)
+		if !changed {
+			continue
+		}
+		if err := applyNaiveMoves(indexInbounds(all), moves); err != nil {
+			logger.Warning("gateway: release naive:", err)
+			continue
+		}
+		if next.UFW {
+			for _, m := range moves {
+				if err := tunnel.AllowUFW(m.Port); err != nil {
+					logger.Warning("gateway: ufw allow naive:", err)
+				}
+			}
+		}
+		body, err := json.Marshal(next)
+		if err != nil {
+			continue
+		}
+		gw.Settings = string(body)
+		if err := db.Model(gw).Select("settings").Updates(gw).Error; err != nil {
+			logger.Warning("gateway: save after naive release:", err)
+		}
+	}
+}
+
+func indexInbounds(all []*model.Inbound) map[int]*model.Inbound {
+	byID := map[int]*model.Inbound{}
+	for _, o := range all {
+		if o != nil {
+			byID[o.Id] = o
+		}
+	}
+	return byID
+}
 
 func (s *InboundService) sweepOrphanGatewayHosts() {
 	all, err := s.GetAllInbounds()
@@ -389,7 +673,9 @@ func (s *InboundService) gatewayAndOthers(id int) (*model.Inbound, []*model.Inbo
 }
 
 func (s *InboundService) ensureGatewayRuntime(gw *model.Inbound, others []*model.Inbound) {
-	if inst, ok := tunnel.GatewayInstanceFromInbound(gw, others); ok {
+	secret, _ := (&SettingService{}).GetSecret()
+	cert, key := gatewayPanelCertPair()
+	if inst, ok := tunnel.GatewayInstanceFromInbound(gw, others, secret, cert, key); ok {
 		_ = tunnel.GetManager().Ensure(inst)
 	}
 	(&TunnelService{inboundService: *s}).Reconcile()

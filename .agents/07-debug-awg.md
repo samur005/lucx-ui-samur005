@@ -17,7 +17,7 @@ Extracted from AGENTS.md. This file is project law.
 - **Healing:** `x-ui install-awg` / Cores → Install after update.
 
 ### Pattern 1: AWG inbound won’t start
-- **Cause:** `awg-quick` not installed or kernel module not loaded. Since lucx.131 the module is installed by default again on `install.sh` (lucx.130 was opt-in, reverted by owner decision); hosts installed in the lucx.130–131 window without the module stay without it until manual install.
+- **Cause:** `awg-quick` not installed or kernel module not loaded. Since lucx.131 the module is installed by default again on `install.sh` (lucx.130 was opt-in, reverted by owner decision). v3.8 overlay dropped the call in .246; lucx.248 restored it in `install.sh` and `update.sh`. Hosts installed in lucx.130–131 or on .246 without the module stay without it until manual install.
 - **Fix:** `x-ui install-awg` / Settings → Cores → Install / `bash /usr/local/x-ui/bin/install-awg-module.sh`. Rollback: `x-ui uninstall-awg` (`.conf` kept). Check `awg show`, `ip link show awgN`.
 - **Cores button “doesn’t install”:** the panel runs the script with `--no-kernel-upgrade` + `DEBIAN_FRONTEND=noninteractive` (else apt/needrestart hangs without TTY). Watch logs `awg: rebuild | …`; status `rebuildRunning` spins while the build runs. After success a reboot is usually not needed.
 - **DKMS build fail with headers present:** Pattern 1s (udp_tunnel ABI on kernel ≥ 7.1.5).
@@ -270,10 +270,32 @@ Extracted from AGENTS.md. This file is project law.
 - **Healing:** panel update, then re-download .conf (PSK already rotated). Or delete+recreate the client.
 - **Lesson:** any partial client save that can hit `fillProtocolDefaults` must preserve tunnel credentials the way Create does.
 
+### Pattern 1ag: DKMS fail on Ubuntu 22.04 5.15.0-194 — `timer_delete` redeclared — FIXED (lucx.267)
+
+- **Symptom (MasyGreen, issue #114):** fresh install / `x-ui install-awg` on `5.15.0-194-generic`. DKMS exit 2. `make.log`: `static declaration of timer_delete follows non-static declaration` in `compat.h`. Panel is up; AWG module is not.
+- **Cause:** lucx.207 always dropped the `ISUBUNTU2204` skip so the `del_timer` wrapper applied. That fixed `5.15.0-82` (no `timer_delete`). `5.15.0-194` backported the symbol; the static wrapper collides.
+- **Fix:** probe `/lib/modules/$BUILD_K/build/include/linux/timer.h` for `timer_delete(`. Declared → leave upstream skip. Absent → apply the wrap.
+- **Healing:** update, then `x-ui install-awg`.
+
 ### Pattern 1ae: DKMS fail on Ubuntu 22.04 5.15 — `timer_delete` — FIXED
 
 - **Symptom:** `x-ui install-awg` / first install: DKMS exit 2, old module left. `make.log`: `implicit declaration of function ‘timer_delete’` in `device.c` / `wg_pm_notification`. Kernel `5.15.0-82-generic`.
 - **Cause:** pin `46803204e7ec` `compat.h` wraps `timer_delete` → `del_timer` for kernels `< 6.1.91`, but skips `ISUBUNTU2204` (assumed backport). 5.15.0-82 has no backport.
-- **Fix:** `apply_timer_delete_compat` drops the Ubuntu 22.04 exception after clone.
+- **Fix:** `apply_timer_delete_compat` drops the Ubuntu 22.04 exception after clone. Keep `ISUBUNTU2004` — 5.4.0-216 declares `timer_delete`.
 - **Healing:** update panel, then `x-ui install-awg` / Cores → Install.
 - **Not a bug (was):** `tproxy`/`mtproxy` curl 404 — they are release-built, never on GitHub raw. install/update now skip that fetch.
+
+### Pattern 1af: DKMS fail on Ubuntu 20.04 5.4 — `chacha_init` undeclared — FIXED (lucx.251)
+
+- **Symptom (VladufQa, 19.09.2026):** web update to lucx.250 ran `install-awg-module.sh`; DKMS exit 2; panel “AWG module not installed”. `make.log`: `‘chacha_init’ undeclared` / `‘chacha20_crypt’ undeclared` in `compat.h` `__compat_chacha_init`. Kernel `5.4.0-216-generic`. Reboot does nothing — module was never built.
+- **Cause:** AWG 3 header protection uses the ChaCha library API. Linux 5.5+ has `chacha_init(u32 *state, …)` / `chacha20_crypt`. The pin’s `< 6.16` wrapper assumes that API and calls `(chacha_init)(state->x, …)`. 5.4 still ships the skcipher `crypto/chacha.h` (`crypto_chacha_init` / `chacha_block`) — include succeeds, symbols do not. Upstream issue #210 / PR #244 (open; PR only shadows the header for VERSION<5.5, which loses to the kernel header already present on 5.4).
+- **Fix:** after clone: `apply_chacha_lib_compat` (Zinc `chacha_init`/`chacha20_crypt` on `< 5.5`) and `apply_blake2s_zinc_compat` (do not `#include <crypto/blake2s.h>` on `< 5.10`, where Zinc still builds `blake2s.o`). 5.5–6.15 keep the kernel ChaCha library. Do not drop `ISUBUNTU2004` on `timer_delete`.
+- **Healing:** update panel, then `x-ui install-awg` / Cores → Install. No reboot if DKMS installs for the running kernel.
+- **Not this:** Debian 13 (6.12 / 7.1.x) — Pattern 1s (udp_tunnel ABI). Ubuntu 22.04 5.15 already has `chacha_init` — Pattern 1ae.
+
+### Pattern 1ah: first install + SSL → AWG script never runs — FIXED
+
+- **Symptom (Igor, 21.09.2026):** fresh install, panel “AWG module not installed”. No dkms, no marker, no journal `awg: rebuild`. Ubuntu 26.04 / kernel 7.0 — headers fine; `x-ui install-awg` then builds in ~1 min.
+- **Cause:** `config_after_install` → `install_acme` does `cd ~`. The LUCX-HOOK then tests `-x bin/install-awg-module.sh` relative to cwd (`/root/bin/…` missing) and **silently skips**. Same in `update.sh` after SSL.
+- **Fix:** hook uses `${xui_folder}/bin/install-awg-module.sh`. Else prints the missing path.
+- **Healing:** `x-ui install-awg` / Cores → Install (already absolute). No reboot if DKMS built for the running kernel.

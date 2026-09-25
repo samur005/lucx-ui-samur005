@@ -1,5 +1,249 @@
 # LucX-UI — Прогресс
 
+## lucx.268 — Masking: hide Naive behind the selected site (2026-09-25)
+
+Naive stays out of the 443 table. On the row below, tick «Спрятать за сайт» and Apply: the share link becomes `naive+https://…@site:443`. Cover uses behindCover; WEB proxy injects forward_proxy. HTTP/3 is turned off so NekoBox does not QUIC to a private port.
+
+**lucxVersion:** lucx.268
+
+---
+
+## lucx.267 — AnyTLS save keeps clients; TrustTunnel listen matches the picker; DKMS timer_delete probe (2026-09-25)
+
+AnyTLS inbound save dropped every client: the form schema had no `clients`, Zod stripped the key, `SyncInbound` wrote an empty set. The field is passthrough now. A save that omits the key (other sidecar forms with the same hole) copies the stored array back; an explicit `clients` array, including empty, is left alone.
+
+TrustTunnel HTTP/2 no longer writes `[listen_protocols.quic]`. HTTP/3 still listens TCP and QUIC. Share lines always set TLV `upstream_protocol` (1 = http2, 2 = http3) so NekoBox does not treat a missing tag as QUIC. HTTP/3 subscription emits https and quic, each as TLV and Throne URI.
+
+DKMS `timer_delete` wrap runs only when the build kernel's `timer.h` does not declare it. Ubuntu 22.04 `5.15.0-194` declares it; the old unconditional wrap was issue #114.
+
+**lucxVersion:** lucx.267
+
+---
+
+## lucx.266 — Masking leaves Naive on its own port (2026-09-25)
+
+Apply no longer offers Naive on the 443 mux (NekoBox times out there). If Naive occupies :443, Apply moves it to a free public port and UFW opens TCP+UDP. A previous Apply that hid Naive on loopback is undone on reconcile, without Revert. Share link stays `naive+https://user:pass@domain:port`. Refresh the subscription after Apply.
+
+Cover with no ZIP gets the nginx welcome page. REALITY dest and unknown SNI fall through to the selected site: Cover, or WEB proxy if there is no Cover. That is the script's decoy. Not ported: nginx TLS fingerprint, the login-decoy catalog, fail2ban.
+
+**lucxVersion:** lucx.266
+
+---
+
+## lucx.265 — CSQTT share: raw `+` between VK hashes (2026-09-23)
+
+Android `parseLinkHashes` splits the raw `hashes` value on `+` before percent-decode. `url.Values` / `URLSearchParams` turned that separator into `%2B`, so the client treated the list as one hash and never connected. qWDTT was fine: its client wants commas and decodes first. Share and `/sub/` now emit `hashes=h1+h2`.
+
+**lucxVersion:** lucx.265
+
+---
+
+## lucx.264 — Masking: don't hide Naive, strip Caddy Via (2026-09-22)
+
+Naive stays off the 443 mux by default. Masking page and the Naive form say so: NekoBox / naive-client times out behind the mask; leave it on its own port and UFW will keep that port open. Cover/tproxy `reverse_proxy` now emits `header_down -Via` and `header_down Server "nginx"`. Site-level `header -Via` ran before Caddy appended `Via: 1.1 Caddy`, so ByeDPI still saw the proxy.
+
+**lucxVersion:** lucx.264
+
+---
+
+## lucx.263 — Masking public host is the panel domain, not a REALITY decoy (2026-09-22)
+
+Public host fell through to the first SNI (REALITY serverNames / dest, e.g. microsoft). Clients dialed that name and timed out; the field reset on each keystroke because the preview query key included it. Resolve order is now request, saved (unless it is that decoy), panel sub/web domain, Cover hostname. The input is local state. Listen column shows the client port (`· :443`) when it differs from the loopback port. Panel naive export uses the gateway Host port. Occupy error names protocol and id when remark is empty. Console web-path reset no longer hides a failed write and accepts a typed path.
+
+**lucxVersion:** lucx.263
+
+---
+
+## lucx.262 — Review fixes: sig-algs, manager race, SPDX sweep (2026-09-21)
+
+Full read-only review of `internal/awg` + `internal/lucx` + hooks
+(`docs/lucx-review-2026-09-21.md`), then fixes. TLS fingerprint: all three
+browser signature_algorithms lists in `cps/cps.go` deviated from the real
+clients (duplicates / bogus `0x0604`/`0x0601`) — now match Chrome, Firefox
+NSS, Safari, and the delegated_credentials list. `Manager.Remove` ran
+`removeManagedFiles` outside `opMu` — a concurrent `Ensure` could write a
+config the delete then removed mid-start; moved inside the critical section.
+`AddOutbound` checked default-tag uniqueness after `db.Create` — now before
+the tag write, deleting the row on failure. `install-awg-module.sh` wiped the
+dest dir before the tarball was fetched+verified (network fail = empty dest)
+and picked the oldest kernel headers (`head -1`) — fixed to `sort -V|tail -1`.
+`awgTunGateway` collided for inbound ids 253 apart — ids ≥254 now map into
+`10.253/16`. `renderClientConf` emitted `MTU = 0` on a zero MTU — line now
+omitted. SPDX headers added to 42 LucX files; `check-lucx.sh` enforces them.
+
+**lucxVersion:** lucx.262
+
+---
+
+## lucx.261 — Masking: unified Caddy process via l4chan bridge (2026-09-21)
+
+New module `caddylucx/` (network `l4chan` + l4 handler `l4http`) hands a
+matched L4 conn straight into an HTTP site block bound `bind l4chan/<key>`
+— same process, no loopback socket, no PROXY header, real client IP
+natively. `caddy-layer4` is now a merged xcaddy build: caddy 2.11.4 +
+caddy-l4 + klzgrad/forwardproxy + caddylucx. New applies set
+`GatewayConfig.Unified` and embed naive/cover/tproxy site blocks into the
+gateway Caddyfile (`RenderSite`/`RenderCoverSite`/`RenderTproxySite`
+extracted from the standalone renderers); the standalone sidecars of
+absorbed inbounds stay off (`GatewayAbsorbed`). Passthrough routes
+(AnyTLS/TrustTunnel/Reality/xhttp) unchanged — `proxy`, PROXY v1 only
+where the backend parses it. Unknown SNI falls back to the cover channel.
+Old gateway configs keep `Unified=false` and render the legacy layout
+(`RenderGatewayCaddyfile` strips `Chan`) until Revert → Apply.
+`GatewaySupportsChan` probes the installed binary for
+`layer4.handlers.l4http` (cached by mtime) — a pre-merge binary falls
+back to the proxy layout instead of dying on an unknown directive.
+E2E on the merged binary: cover SNI 200, naive CONNECT 200/407,
+passthrough no PROXY. Caveat: arbitrary unknown SNI can fail TLS cert
+selection before reaching the cover fallback (no `fallback_sni` in the
+Caddyfile grammar).
+
+**lucxVersion:** lucx.261
+
+---
+
+## lucx.260 — Masking: no PROXY to backends that can't parse it (2026-09-21)
+
+caddy-l4 sent `proxy_protocol v1` to every route — AnyTLS, TrustTunnel and
+Xray xhttp/splithttp feed it to their TLS parser → client timeout.
+`GatewayRoute.NoProxy` renders a bare `proxy` line; Apply skips
+`acceptProxyProtocol` on those rows. ClassifyInbound now skips what SNI
+can never route: ws/xhttp/grpc/httpupgrade with security=none, UDP
+transports (kcp/quic), naive behindCover/raw Caddyfile, tproxy
+behindCover — they stay public instead of dying on loopback. Naive Auto
+TLS can't renew HTTP-01 behind the gateway: Apply switches it to the
+panel cert when it covers the domain, else fails loudly (revert keeps
+cert mode — snapshot stores listen/port/stream only). Apply rejects a
+still-public TCP inbound on the gateway port. Preview rows carry
+`noProxy`/`note`, MaskingPage shows notes as warnings. Tests:
+ClassifyInbound table, NoProxy render/propagation, InboundUsesTCP,
+SetNaiveCert. Gateways applied before lucx.260: Revert → Apply once to
+regenerate routes without PROXY.
+
+**lucxVersion:** lucx.260
+
+---
+
+## lucx.259 — AWG hook skipped after SSL cd ~ (2026-09-21)
+
+Fresh install with SSL never ran `install-awg-module.sh`: `install_acme` does `cd ~`, the LUCX-HOOK tested relative `bin/install-awg-module.sh` and skipped. Igor, Ubuntu 26.04, lucx.255 — no dkms, no module. Hook now uses `${xui_folder}/bin/…` in `install.sh` and `update.sh`. Already-installed hosts: `x-ui install-awg` (Igor’s box built OK on kernel 7.0).
+
+**lucxVersion:** lucx.259
+
+---
+
+## lucx.258 — Naive share URL host is Domain, not Masking Host (2026-09-21)
+
+Official `naive-client`: `@naive.vladnl.run.place` → 200; `@vladnl.work.gd` and `@vladnl.work.gd?sni=naive…` → fail. Stock naive uses URL host as TLS SNI and ignores `?sni=`. lucx.253 put Masking publicHost in the URL → L4 sent the client to WEB proxy. `ClientURLAt`: host = inbound domain, port from Host (443).
+
+**lucxVersion:** lucx.258
+
+---
+
+## lucx.257 — Masking L4 matching_timeout 15s (2026-09-21)
+
+caddy-l4 default matching phase is 3s. No ClientHello in that window → `aborted matching according to timeout` (VladufQa, naive behind Masking). RenderGatewayCaddyfile now sets `matching_timeout 15s`. Test: `TestRenderGatewayCaddyfile_SNIAndDrop`.
+
+**lucxVersion:** lucx.257
+
+---
+
+## lucx.256 — Naive behind Masking: no HTTP/3 (2026-09-21)
+
+Loopback Caddy (PROXY from L4) pinned h1/h2. EnableH3 still advertised `Alt-Svc: h3=":54807"`; NekoBox QUIC to the remapped port times out (VladufQa). L4 is TCP-only. `writeCaddyServers` forces `protocols h1 h2` whenever `proxyProtocol` is set (naive/cover/tproxy). Tests: `TestRenderCaddyfileLoopbackPinsH1H2` + cover/tproxy loopback.
+
+**lucxVersion:** lucx.256
+
+---
+
+## lucx.255 — Masking hide-panel redirects like webBasePath (2026-09-20)
+
+Apply with hide-panel bounces the browser to `https://publicHost/<base>/panel/masking`. Revert bounces back to the panel port. Same idea as changing webBasePath. Files: `maskingUrl.ts`, `MaskingPage.tsx`, `gateway.go` preview `webPort`/`webTLS`. CI: `SettingService{}.GetCertFile()` is not addressable — `(&SettingService{}).GetCertFile()`.
+
+**lucxVersion:** lucx.255
+
+---
+
+## lucx.254 — qWDTT TUN 10.68/16 so CSQTT can coexist (2026-09-20)
+
+SpaceNeuroX hardcodes `wdtt0` at `10.66.66.1/16`, which contains CSQTT `csqtt1` `10.66.67.0/24`. Overlay `third_party/patches/qwdtt-subnet.patch` (applied in `pack-sidecars.sh`) moves WG to `10.68.66.1/16` and remaps stored `10.66.*` device IPs on load. Panel mutex dropped. Clients GETCONF the new Address on next connect. Needs the rebuilt qWDTT sidecar.
+
+**lucxVersion:** lucx.254
+
+---
+
+## lucx.253 — Naive behind Masking keeps its SNI (2026-09-20)
+
+Host dest was written into Naive `Domain`, so sub links used public host as TLS SNI and Caddy never routed to Naive. `ClientURLAt`: TCP host/port from Host, `sni=` inbound domain.
+
+**lucxVersion:** lucx.253
+
+---
+
+## lucx.252 — Masking: edit SNI; hide-panel sub URL (2026-09-20)
+
+Masking table edits inbound SNI (Cover hostname / REALITY serverNames / TLS serverName). Apply writes it and builds the L4 map. Duplicate SNI blocks Apply. Hide-panel Caddy keeps `Host`; sub URL uses 443 not `127.0.0.1:2096`.
+
+**lucxVersion:** lucx.252
+
+---
+
+## Financial supporters in README (2026-09-19)
+
+Acknowledgements: Игорь, пётр смолин, Камслат Глорихо, Михаил Ляшенко, Aleksandr S., Сила Растений, Виталий Зайцев. Files: `README.md`, `docs/readme/*.md`.
+
+**lucxVersion:** lucx.251 (no bump, docs only)
+
+---
+
+## lucx.251 — AWG DKMS on Ubuntu 20.04 5.4 (chacha + timer_delete) (2026-09-19)
+
+Pin `3c38e168beb7` failed DKMS on 5.4.0-216 (vladufqaa). `compat.h` `<6.16` wrappers call `chacha_init` / `chacha20_crypt` (Linux 5.5+); 5.4 still has the skcipher header — Zinc fallback. The `<6.19` block also `#include <crypto/blake2s.h>` while Zinc still builds blake2s.o on < 5.10; 5.4.0-216 ships that header → skip the include on < 5.10. Leave `ISUBUNTU2004` on `timer_delete` (5.4.0-216 already declares it).
+
+**lucxVersion:** lucx.251
+
+---
+
+## Masking page chrome (2026-09-19)
+
+`/masking` now uses the same AppSidebar + content-shell as Hosts. Body is three Cards (status / tables / apply) like Cores. Apply/Revert unchanged. Files: `MaskingPage.tsx`, `page-shell.css`, `page-cards.css`, `usePageTitle.ts`. Checks: `npm run typecheck`, `npm run lint`.
+
+**lucxVersion:** lucx.250 (no bump, UI only)
+
+---
+
+## lucx.250 — XHTTP + Masking: PROXY; REALITY SNI stays dest (2026-09-19)
+
+Caddy L4 sends PROXY v1; TCP/WS got `acceptProxyProtocol`, XHTTP did not → timeout (#104). Apply now sets `sockopt.acceptProxyProtocol` for XHTTP/gRPC. Client REALITY SNI is not rewritten to public host — Caddy matches dest SNI (`i.s-microsoft.com`). Public host is DNS/address only.
+
+**lucxVersion:** lucx.250
+
+---
+
+## lucx.249 — Masking survives reboot; WEB proxy keeps public SNI (2026-09-19)
+
+Tunnel Reconcile never started Caddy L4, so after reboot/update VLESS+WEB proxy on 443 stayed dead until Masking Revert→Apply. Reconcile now starts `gateway-*`. lucx.247 gave the public host SNI to VLESS, so Cover/WEB proxy on the same name never received TLS. New Apply: Caddy rows keep that SNI; VLESS `OverrideSniFromAddress` only when no Cover/WEB proxy owns it. Already-applied .247 hosts: one Revert→Apply (do not rewrite live client SNI on boot).
+
+**lucxVersion:** lucx.249
+
+---
+
+## lucx.248 — install.sh installs AWG module again (2026-09-19)
+
+v3.8 overlay dropped the `bin/install-awg-module.sh` call from `install.sh` / `update.sh`. Clean install of .246 left the panel with “AWG module not installed”. Restored after fail2ban (never fatal). Fresh install may still reboot if DKMS upgraded the kernel; update only prints `.awg-reboot-needed`.
+
+**lucxVersion:** lucx.248
+
+---
+
+## lucx.247 — Masking: VLESS SNI = public host (2026-09-19)
+
+Apply now sets Host `OverrideSniFromAddress` so the client SNI becomes the public hostname (Vlad). Appends that name to REALITY `serverNames`. L4 routes the public host to Xray, not Cover; Cover is REALITY dest when Cover is selected.
+
+**lucxVersion:** lucx.247
+
+---
+
 ## lucx.246 — SNI gateway: Caddy L4, панель за Cover или WEB proxy (2026-09-18)
 
 Nginx stream sidecar replaced with Caddy L4 (`caddy-layer4`, xcaddy v2.11.4 + caddy-l4 `42db5690`). Hide panel works with Cover **or** tproxy Caddy (handles before reverse_proxy). Masking UI no longer requires Cover. pack-sidecars / release.yml / install.sh drop nginx.

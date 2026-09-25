@@ -51,6 +51,7 @@ type naiveInboundSettings struct {
 	UseRawConfig     bool   `json:"useRawConfig"`
 	RawConfig        string `json:"rawConfig"`
 	BehindCover      bool   `json:"behindCover"`
+	HideOn443        bool   `json:"hideOn443"`
 	Clients          []struct {
 		Email  string `json:"email"`
 		Enable bool   `json:"enable"`
@@ -89,6 +90,7 @@ func ConfigFromInbound(ib *model.Inbound) (NaiveConfig, bool) {
 		UseRawConfig:     s.UseRawConfig,
 		RawConfig:        s.RawConfig,
 		BehindCover:      s.BehindCover,
+		HideOn443:        s.HideOn443,
 	}.Merge()
 	if IsLoopbackListen(ib.Listen) {
 		cfg.Listen = ib.Listen
@@ -105,7 +107,7 @@ func InstanceFromInbound(ib *model.Inbound, secret []byte) (Instance, bool) {
 	if !ok {
 		return Instance{}, false
 	}
-	if !ib.Enable {
+	if !ib.Enable || cfg.HideOn443 || cfg.BehindCover {
 		return Instance{
 			Core:    Naive,
 			Key:     NaiveKey(ib.Id),
@@ -114,15 +116,8 @@ func InstanceFromInbound(ib *model.Inbound, secret []byte) (Instance, bool) {
 	}
 
 	var extra []AuthPair
-	if !cfg.UseRawConfig && len(secret) > 0 {
-		var s naiveInboundSettings
-		_ = json.Unmarshal([]byte(ib.Settings), &s)
-		for _, c := range s.Clients {
-			if !c.Enable || strings.TrimSpace(c.Email) == "" {
-				continue
-			}
-			extra = append(extra, InboundAuthPair(secret, ib, c.Email))
-		}
+	if !cfg.UseRawConfig {
+		extra = naiveClientAuth(secret, ib)
 	}
 
 	// Inbound mode: service auth optional when at least one client pair exists.
@@ -184,22 +179,51 @@ func (c NaiveConfig) ValidateInbound(hasClientAuth bool) error {
 	return nil
 }
 
+// SetNaiveCert switches a Naive inbound off Auto TLS onto a concrete cert/key
+// pair — HTTP-01 has no public :80 once the masking gateway owns the port.
+func SetNaiveCert(ib *model.Inbound, certFile, keyFile string) {
+	if ib == nil || ib.Protocol != model.Naive {
+		return
+	}
+	var m map[string]any
+	_ = json.Unmarshal([]byte(ib.Settings), &m)
+	if m == nil {
+		m = map[string]any{}
+	}
+	m["useAcme"] = false
+	m["certFile"] = certFile
+	m["keyFile"] = keyFile
+	out, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	ib.Settings = string(out)
+}
+
 // ClientURLFor builds a naive+https share link for one auth pair.
 func (c NaiveConfig) ClientURLFor(pair AuthPair, remark string) string {
-	domain := strings.TrimSpace(c.Domain)
+	return c.ClientURLAt(pair, c.Domain, c.Port, remark)
+}
+
+// ClientURLAt is ClientURLFor with an explicit port (masking Host :443).
+// URL host is always Domain: stock naiveproxy uses the host as TLS SNI and
+// has no ?sni= (lucx.253's query is ignored → L4 sends the client to Cover).
+func (c NaiveConfig) ClientURLAt(pair AuthPair, addr string, port int, remark string) string {
 	user := strings.TrimSpace(pair.User)
-	if domain == "" || user == "" {
+	host := strings.TrimSpace(c.Domain)
+	if host == "" {
+		host = strings.TrimSpace(addr)
+	}
+	if host == "" || user == "" {
 		return ""
 	}
-	port := c.Port
 	if port <= 0 {
 		port = 443
 	}
-	host := net.JoinHostPort(domain, strconv.Itoa(port))
 	u := url.URL{
 		Scheme:   "https",
 		User:     url.UserPassword(user, strings.TrimSpace(pair.Pass)),
-		Host:     host,
+		Host:     net.JoinHostPort(host, strconv.Itoa(port)),
 		Fragment: strings.TrimSpace(remark),
 	}
 	return "naive+" + u.String()

@@ -68,6 +68,9 @@ func TestRenderCoverCaddyfile_LoopbackBind(t *testing.T) {
 	if !strings.Contains(got, "proxy_protocol") {
 		t.Fatalf("loopback cover needs PROXY protocol:\n%s", got)
 	}
+	if !strings.Contains(got, "protocols h1 h2") {
+		t.Fatalf("loopback cover must pin h1/h2:\n%s", got)
+	}
 }
 
 func TestRenderCoverCaddyfile_TproxyWins(t *testing.T) {
@@ -81,7 +84,7 @@ func TestRenderCoverCaddyfile_TproxyWins(t *testing.T) {
 		routes:         []CoverRoute{{Path: "/p", Dest: "https://127.0.0.1:2053"}},
 		publicUpstream: "http://127.0.0.1:3000",
 	})
-	for _, need := range []string{"reverse_proxy 127.0.0.1:24002", "header -Via", "protocols h1 h2", "encode zstd gzip", "handle /p*", "https://127.0.0.1:2053"} {
+	for _, need := range []string{"reverse_proxy 127.0.0.1:24002", "header_down -Via", "header_down Server \"nginx\"", "protocols h1 h2", "encode zstd gzip", "handle /p*", "https://127.0.0.1:2053", "header_up Host {http.request.host}"} {
 		if !strings.Contains(got, need) {
 			t.Fatalf("tproxy caddy missing %q:\n%s", need, got)
 		}
@@ -90,6 +93,27 @@ func TestRenderCoverCaddyfile_TproxyWins(t *testing.T) {
 		if strings.Contains(got, no) {
 			t.Fatalf("tproxy must own the host, found %q in:\n%s", no, got)
 		}
+	}
+}
+
+func TestEnsureDefaultDecoy(t *testing.T) {
+	dir := t.TempDir()
+	if err := EnsureDefaultDecoy(dir); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "index.html"))
+	if err != nil || !strings.Contains(string(b), "Welcome to nginx!") {
+		t.Fatalf("seed: %v %q", err, b)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureDefaultDecoy(dir); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(filepath.Join(dir, "index.html"))
+	if string(b) != "mine" {
+		t.Fatalf("overwrote upload: %q", b)
 	}
 }
 

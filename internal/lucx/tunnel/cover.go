@@ -129,9 +129,15 @@ type coverAttach struct {
 	publicUpstream string
 	httpsPort      int
 	skipHTTP       bool
+	// bind overrides the site bind directive (e.g. "l4chan/cover-1" when the
+	// site is embedded into the unified gateway Caddyfile).
+	bind string
 }
 
 func writeCaddyServers(b *strings.Builder, h1h2, proxyProtocol bool) {
+	if proxyProtocol {
+		h1h2 = true
+	}
 	if !h1h2 && !proxyProtocol {
 		return
 	}
@@ -154,21 +160,39 @@ func RenderCoverCaddyfile(hostname, cert, key string, a coverAttach) string {
 	h1h2 := a.tproxyRelay > 0 || (a.naive != nil && !a.naive.EnableH3)
 	writeCaddyServers(&b, h1h2, a.skipHTTP)
 	b.WriteString("}\n")
+	if !a.skipHTTP {
+		b.WriteString(":" + strconv.Itoa(coverHTTPPort) + " {\n\tredir https://{host}{uri} permanent\n}\n")
+	}
+	writeCoverSite(&b, hostname, cert, key, a)
+	return b.String()
+}
+
+// RenderCoverSite emits only the cover site block for the unified gateway
+// Caddyfile — a.bind carries the l4chan listener name.
+func RenderCoverSite(hostname, cert, key string, a coverAttach) string {
+	var b strings.Builder
+	writeCoverSite(&b, hostname, cert, key, a)
+	return b.String()
+}
+
+func writeCoverSite(b *strings.Builder, hostname, cert, key string, a coverAttach) {
 	httpsPort := a.httpsPort
 	if httpsPort <= 0 {
 		httpsPort = coverHTTPSPort
 	}
-	if !a.skipHTTP {
-		b.WriteString(":" + strconv.Itoa(coverHTTPPort) + " {\n\tredir https://{host}{uri} permanent\n}\n")
-	}
 	// Naive padding dies on host:443 (None). :443, "host" is Variant1 even
-	// with file_server/encode in the same site (stand 2026-09-06).
-	if a.naive != nil {
+	// with file_server/encode in the same site (stand 2026-09-06). Embedded
+	// (a.bind set) is the same: the site is the gateway's unknown-SNI
+	// fallback and must answer any Host.
+	if a.naive != nil || a.bind != "" {
 		b.WriteString(":" + strconv.Itoa(httpsPort) + ", " + caddyToken(hostname) + " {\n")
 	} else {
 		b.WriteString(hostname + ":" + strconv.Itoa(httpsPort) + " {\n")
 	}
-	if a.skipHTTP {
+	switch {
+	case a.bind != "":
+		b.WriteString("\tbind " + a.bind + "\n")
+	case a.skipHTTP:
 		b.WriteString("\tbind 127.0.0.1\n")
 	}
 	if strings.TrimSpace(cert) != "" && strings.TrimSpace(key) != "" {
@@ -177,12 +201,16 @@ func RenderCoverCaddyfile(hostname, cert, key string, a coverAttach) string {
 	if a.tproxyRelay > 0 {
 		b.WriteString("\tencode zstd gzip\n")
 		b.WriteString("\theader -Via\n")
-		writeHTTPPanelRoutes(&b, a.routes, "\t")
-		b.WriteString("\treverse_proxy 127.0.0.1:" + strconv.Itoa(a.tproxyRelay) +
-			" {\n\t\ttransport http {\n\t\t\tresponse_header_timeout 40s\n\t\t}\n\t}\n}\n")
-		return b.String()
+		b.WriteString("\theader Server nginx\n")
+		writeHTTPPanelRoutes(b, a.routes, "\t")
+		b.WriteString("\treverse_proxy 127.0.0.1:" + strconv.Itoa(a.tproxyRelay) + " {\n")
+		writeReverseProxyCamouflage(b, "\t\t")
+		b.WriteString("\t\ttransport http {\n\t\t\tresponse_header_timeout 40s\n\t\t}\n\t}\n}\n")
+		return
 	}
 	b.WriteString("\tencode zstd gzip\n")
+	b.WriteString("\theader -Via\n")
+	b.WriteString("\theader Server nginx\n")
 	if a.publicDir != "" {
 		b.WriteString("\troot * " + caddyToken(a.publicDir) + "\n")
 	}
@@ -195,21 +223,22 @@ func RenderCoverCaddyfile(hostname, cert, key string, a coverAttach) string {
 				path += "*"
 			}
 			b.WriteString("\t\thandle " + path + " {\n")
-			writeCoverReverseProxy(&b, r.Dest, "\t\t\t")
+			writeCoverReverseProxy(b, r.Dest, "\t\t\t")
 			b.WriteString("\t\t}\n")
 		}
 		if a.naive != nil {
-			a.naive.appendForwardProxy(&b, a.naiveAuth, "\t\t")
+			a.naive.appendForwardProxy(b, a.naiveAuth, "\t\t")
 		}
 		b.WriteString("\t}\n")
 	}
 	if a.publicUpstream != "" {
-		b.WriteString("\treverse_proxy " + coverUpstreamHost(a.publicUpstream) + "\n")
+		b.WriteString("\treverse_proxy " + coverUpstreamHost(a.publicUpstream) + " {\n")
+		writeReverseProxyCamouflage(b, "\t\t")
+		b.WriteString("\t}\n")
 	} else if a.publicDir != "" {
 		b.WriteString("\tfile_server\n")
 	}
 	b.WriteString("}\n")
-	return b.String()
 }
 
 func writeHTTPPanelRoutes(b *strings.Builder, routes []CoverRoute, indent string) {
@@ -234,14 +263,21 @@ func writeHTTPPanelRoutes(b *strings.Builder, routes []CoverRoute, indent string
 
 func writeCoverReverseProxy(b *strings.Builder, dest, indent string) {
 	dest = strings.TrimSpace(dest)
+	b.WriteString(indent + "reverse_proxy " + dest + " {\n")
+	b.WriteString(indent + "\theader_up Host {http.request.host}\n")
+	writeReverseProxyCamouflage(b, indent+"\t")
 	if strings.HasPrefix(dest, "https://") {
-		b.WriteString(indent + "reverse_proxy " + dest + " {\n")
 		b.WriteString(indent + "\ttransport http {\n" + indent + "\t\ttls_insecure_skip_verify\n" + indent + "\t}\n")
-		b.WriteString(indent + "}\n")
-		return
 	}
-	dest = strings.TrimPrefix(dest, "http://")
-	b.WriteString(indent + "reverse_proxy " + dest + "\n")
+	b.WriteString(indent + "}\n")
+}
+
+// writeReverseProxyCamouflage strips Caddy's own Via and plants a Server
+// header. Site-level "header -Via" runs before reverse_proxy adds Via, so
+// ByeDPI still sees "1.1 Caddy".
+func writeReverseProxyCamouflage(b *strings.Builder, indent string) {
+	b.WriteString(indent + "header_down -Via\n")
+	b.WriteString(indent + "header_down Server \"nginx\"\n")
 }
 
 func coverUpstreamHost(raw string) string {
