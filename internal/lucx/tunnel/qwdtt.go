@@ -63,6 +63,10 @@ type QwdttConfig struct {
 
 	MigratedToInbound bool `json:"migratedToInbound,omitempty"`
 	MigratedInboundId int  `json:"migratedInboundId,omitempty"`
+
+	// nodeManaged marks a config parsed from a node-managed inbound on the
+	// master (never serialized): EnsureSubHost must not stamp this host's IP.
+	nodeManaged bool
 }
 
 // DefaultQwdttConfig returns sensible defaults for a fresh qWDTT core.
@@ -166,7 +170,7 @@ func (c QwdttConfig) WithPeerHost(host string) QwdttConfig {
 // ClientURI / subscription always have a peer after save. Dial-based probe
 // (no HTTP); fails open (leaves empty) when the host has no outbound route.
 func (c QwdttConfig) EnsureSubHost() QwdttConfig {
-	if strings.TrimSpace(c.SubHost) != "" {
+	if strings.TrimSpace(c.SubHost) != "" || c.nodeManaged {
 		return c
 	}
 	ip := detectOutboundIPv4()

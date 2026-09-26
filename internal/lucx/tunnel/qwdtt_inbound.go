@@ -40,6 +40,10 @@ func QwdttConfigFromInbound(ib *model.Inbound) (QwdttConfig, bool) {
 			}
 		}
 	}
+	if ib.NodeID != nil { // LUCX-HOOK: sidecar runs on the node, not here
+		cfg.nodeManaged = true
+		cfg.SubHost = NodeSidecarSubHost(cfg.SubHost)
+	}
 	cfg = cfg.Merge()
 	if c2, err := cfg.EnsureVkHashes(); err == nil {
 		cfg = c2
