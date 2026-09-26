@@ -52,6 +52,7 @@ const NAIVE = '/panel/api/tunnel/naive';
 const OLCRTC = '/panel/api/tunnel/olcrtc';
 const QWDTT = '/panel/api/tunnel/qwdtt';
 const VK = '/panel/api/tunnel/vk';
+const WB = '/panel/api/tunnel/wb';
 const CSQTT = '/panel/api/tunnel/csqtt';
 const MIERU = '/panel/api/tunnel/mieru';
 const TRUSTTUNNEL = '/panel/api/tunnel/trusttunnel';
@@ -273,4 +274,55 @@ export const tunnelsApi = {
     ),
   vkStop: (call_id?: string): Promise<Msg<Record<string, unknown>>> =>
     HttpUtil.post<Record<string, unknown>>(`${VK}/stop`, { call_id: call_id ?? '' }, JSON_HEADERS),
+
+  // WB Stream room generator for olcRTC (provider wbstream). Silent: callers toast.
+  wbStatus: (): Promise<Msg<WbStatus>> =>
+    HttpUtil.get<WbStatus>(`${WB}/status`, undefined, { silent: true }),
+  wbSaveCookies: (cookie_string: string): Promise<Msg<WbStatus>> =>
+    HttpUtil.post<WbStatus>(`${WB}/cookies`, { cookie_string }, { ...JSON_HEADERS, silent: true }),
+  wbClearCookies: (): Promise<Msg<WbStatus>> =>
+    HttpUtil.post<WbStatus>(`${WB}/cookies/clear`, {}, { ...JSON_HEADERS, silent: true }),
+  wbCreate: (opts?: { apply?: boolean; inboundId?: number }): Promise<Msg<WbCreateResult>> =>
+    HttpUtil.post<WbCreateResult>(
+      `${WB}/create`,
+      { apply: opts?.apply ?? false, inbound_id: opts?.inboundId ?? 0 },
+      { ...JSON_HEADERS, silent: true },
+    ),
+};
+
+export type WbRoom = {
+  room_id: string;
+  join_link: string;
+  created_at: number;
+  inbound_id?: number;
+};
+
+export type WbOlcrtcInbound = {
+  id: number;
+  remark: string;
+  enable: boolean;
+  provider: string;
+  room_id: string;
+  remote: boolean;
+};
+
+export type WbStatus = {
+  cookies_ok: boolean;
+  cookies_present: boolean;
+  cookies_expired: boolean;
+  cookies_hint: string;
+  cookie_names: string[] | null;
+  has_refresh: boolean;
+  has_token: boolean;
+  token_exp?: number;
+  last_ok_at?: number;
+  last_error?: string;
+  rooms: WbRoom[] | null;
+  inbounds: WbOlcrtcInbound[] | null;
+};
+
+export type WbCreateResult = WbStatus & {
+  room_id: string;
+  join_link: string;
+  applied_inbound_id: number;
 };

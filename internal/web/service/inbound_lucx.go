@@ -1185,6 +1185,7 @@ func (s *InboundService) normalizeLucxSidecarsOnCreate(inbound *model.Inbound) e
 		s.normalizeCsqttSettings(inbound)
 	}
 	if inbound.Protocol == model.Olcrtc {
+		s.ensureOlcrtcWbRoom(inbound)
 		s.normalizeOlcrtcSettings(inbound)
 		inbound.Port = 0
 		if err := s.normalizeOlcrtcXrayPort(inbound, ""); err != nil {
@@ -1268,6 +1269,7 @@ func (s *InboundService) normalizeLucxSidecarsOnUpdate(inbound, oldInbound *mode
 		s.normalizeCsqttSettings(inbound)
 	}
 	if inbound.Protocol == model.Olcrtc {
+		s.ensureOlcrtcWbRoom(inbound)
 		s.normalizeOlcrtcSettings(inbound)
 		inbound.Port = 0
 		if err := s.normalizeOlcrtcXrayPort(inbound, oldInbound.Settings); err != nil {

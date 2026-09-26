@@ -57,6 +57,21 @@ English: [FORK.en.md](FORK.en.md)
 
 После выбора шаблона форма вызывает штатные обработчики сети/безопасности (keypair Reality, TLS, KCP finalmask и т.п.). Дальше заполните порт, SNI/dest и остальные поля как обычно.
 
+### 3. Генератор комнат WB Stream для olcRTC
+
+Для olcRTC с провайдером **WB Stream** панель сама создаёт комнату на stream.wb.ru (гостю WB создавать комнаты не даёт) и записывает её ID в настройки инбаунда:
+
+1. **Настройки панели → Ядра → «Открыть конфиги туннелей»** → карточка **olcRTC** → блок **«Генератор комнат WB Stream»**.
+2. Вставить заголовок `Cookie` запроса `slide-v3` со stream.wb.ru (нужна cookie `wbx-refresh`) или `Bearer`-токен → **«Сохранить сессию»**.
+3. Выбрать инбаунд olcRTC (провайдер WB Stream) в **«Куда записать ID комнаты»** → **«Создать комнату»**. ID пишется в `settings.roomId`, olcrtc перезапускается сам; клиентам нужна новая ссылка `olcrtc://`.
+
+Также: кнопка **«Создать комнату»** под полем **Room ID / URL** в форме инбаунда olcRTC и автосоздание при сохранении инбаунда с пустой комнатой.
+
+- пакет `internal/lucx/wbcreator/`, API `/panel/api/tunnel/wb/*` (`status`, `cookies`, `cookies/clear`, `create`)
+- код комнатного API — из [kulikov0/whitelist-bypass](https://github.com/kulikov0/whitelist-bypass) (MIT), см. [CREDITS.md](../CREDITS.md)
+
+Подробнее, включая где взять cookies: [WBROOM.md](WBROOM.md).
+
 ---
 
 ## Важно: `install.sh` апстрима ≠ бинарник форка
@@ -212,6 +227,7 @@ ufw reload
 1. Откройте URL из вывода `install.sh` (или `https://IP:ПОРТ/webBasePath/`).
 2. **Туннели → qWDTT → «Генератор vk_hash»**.
 3. **Inbounds → создать/редактировать → «Шаблоны»**.
+4. **Туннели → olcRTC → «Генератор комнат WB Stream»**.
 
 ---
 
@@ -260,6 +276,7 @@ systemctl status x-ui --no-pager
 
 1. **Туннели → qWDTT → «Генератор vk_hash»** — сохранить cookies, сгенерировать, убедиться что `VkHashes` заполнилось.
 2. **Inbounds → создать/редактировать → «Шаблоны»** — выбрать пресет, убедиться что network/security подставились.
+3. **Туннели → olcRTC → «Генератор комнат WB Stream»** — сохранить сессию stream.wb.ru, «Создать комнату», убедиться что ID появился в инбаунде olcRTC (или кнопка «Создать комнату» в форме инбаунда olcRTC при провайдере WB Stream).
 
 ---
 
@@ -302,6 +319,7 @@ git push origin feat/native-vk-hash-generator
 - `EnsureVkHashes` и `internal/lucx/tunnel/vkhash.go`
 - `internal/lucx/vkcreator/`
 - файлы inbound Templates (кнопка «Шаблоны», пресеты, i18n)
+- `internal/lucx/wbcreator/`, `internal/web/controller/wb_creator.go`, `internal/web/service/olcrtc_wbroom.go` (+ вызов `ensureOlcrtcWbRoom` в `inbound_lucx.go`), `OlcrtcWbPanel.tsx`
 - `docs/FORK.md`
 
 Затем `git add` → `git commit` → `git push origin feat/native-vk-hash-generator`.
@@ -344,6 +362,7 @@ ss -tlnp | grep -E '29830|2096'
 
 1. **Туннели → qWDTT → генератор vk_hash** — cookies, генерация, заполнение `VkHashes`.
 2. **Inbounds → «Шаблоны»** — пресеты подставляются.
+3. **Туннели → olcRTC → «Генератор комнат WB Stream»** — статус сессии, «Создать комнату».
 
 ### Если стёрся только хук EnsureVkHashes
 
@@ -362,6 +381,7 @@ curl -fsSL https://raw.githubusercontent.com/samur005/lucx-ui-samur005/feat/nati
 | Документ | О чём |
 | --- | --- |
 | [VKHASH.md](VKHASH.md) | Детали vk-hash, меню, env, AntiBS |
+| [WBROOM.md](WBROOM.md) | Генератор комнат WB Stream для olcRTC, где взять cookies |
 | [vkhash-autogen.md](vkhash-autogen.md) | Краткая шпаргалка autogen |
 | [UPDATE-VKHASH.md](UPDATE-VKHASH.md) | Только про обновления и риск затирания |
 | [CREDITS.md](../CREDITS.md) | Provenance WDTT → `vkcreator` |

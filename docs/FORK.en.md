@@ -8,6 +8,7 @@ Full guide (Russian): [FORK.md](FORK.md)
 
 1. **Native vk-hash auto-generation for qWDTT** — Tunnels → qWDTT → **«Генератор vk_hash» / VK hash generator**: paste VK cookies → create call → fill `VkHashes`. Fallbacks: `LUCX_VK_HASH`, optional external `LUCX_WDTT_*`. Package `internal/lucx/vkcreator/`, API `/panel/api/tunnel/vk/*`. See [VKHASH.md](VKHASH.md), [CREDITS.md](../CREDITS.md).
 2. **Inbound Templates** — **«Шаблоны» / Templates** on inbound create/edit modal with VLESS presets: XHTTP+Reality, gRPC+Reality, gRPC+TLS, WS+TLS, HTTPUpgrade+TLS, KCP.
+3. **WB Stream room generator for olcRTC** — Settings → Cores → "Open tunnel configs" → olcRTC → **«Генератор комнат WB Stream» / WB Stream room generator**: save a stream.wb.ru session (`wbx-refresh` cookie or Bearer) → **Create room** → the room ID is written into the chosen olcRTC inbound (`settings.roomId`). Also a **Create room** button in the olcRTC inbound form and auto-create on save. Package `internal/lucx/wbcreator/`, API `/panel/api/tunnel/wb/*`. Room API from kulikov0/whitelist-bypass (MIT). See [WBROOM.md](WBROOM.md), [CREDITS.md](../CREDITS.md).
 
 Stock `install.sh` / panel **Update** / `x-ui update` install the **upstream** binary **without** these features. Build from this repo to get them. Never use those for “updating the fork”.
 
@@ -153,6 +154,7 @@ ufw reload
 1. Open the URL from `install.sh` (or `https://IP:PORT/webBasePath/`).
 2. **Tunnels → qWDTT → VK hash generator**.
 3. **Inbounds → create/edit → Templates**.
+4. **Tunnels → olcRTC → WB Stream room generator**.
 
 ---
 
@@ -180,7 +182,7 @@ git merge upstream/main
 
 On success: `git push origin feat/native-vk-hash-generator`.
 
-On conflicts: keep `EnsureVkHashes`, `internal/lucx/tunnel/vkhash.go`, `internal/lucx/vkcreator/`, inbound Templates files, and `docs/FORK.md` — then add / commit / push.
+On conflicts: keep `EnsureVkHashes`, `internal/lucx/tunnel/vkhash.go`, `internal/lucx/vkcreator/`, inbound Templates files, `internal/lucx/wbcreator/` + `wb_creator.go` + `olcrtc_wbroom.go` (and the `ensureOlcrtcWbRoom` calls in `inbound_lucx.go`), `OlcrtcWbPanel.tsx`, and `docs/FORK.md` — then add / commit / push.
 
 GitHub **Sync fork → Update** is OK; **Discard** is forbidden.
 
@@ -212,7 +214,7 @@ systemctl is-active x-ui
 ss -tlnp | grep -E '29830|2096'
 ```
 
-**UI check again:** Tunnels → qWDTT → vk hash generator; Inbounds → Templates.
+**UI check again:** Tunnels → qWDTT → vk hash generator; Inbounds → Templates; Tunnels → olcRTC → WB Stream room generator (session status, Create room).
 
 Hash-hook-only recovery: `scripts/apply-vkhash.sh` (see Russian doc for curl one-liner), then Part 2.
 

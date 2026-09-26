@@ -197,6 +197,7 @@ func (a *APIController) initRouter(g *gin.RouterGroup) {
 	tunnelGroup := api.Group("/tunnel")
 	a.tunnelController = NewTunnelController(tunnelGroup)
 	a.tunnelController.registerVKRoutes(tunnelGroup)
+	a.tunnelController.registerWBRoutes(tunnelGroup)
 	// END LUCX-HOOK
 	// LUCX-HOOK: LucX capability probe for multi-node deploy gating.
 	// Masters call GET /panel/api/lucx/hello on remotes to learn nodeType/features.
