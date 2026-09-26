@@ -1065,6 +1065,33 @@ export const sections: readonly Section[] = [
       },
       {
         method: 'GET',
+        path: '/panel/api/tunnel/wb/status',
+        summary:
+          'WB Stream room generator (olcRTC provider wbstream): stored stream.wb.ru session health (cookie names only, never values), bearer expiry, last error, recent rooms and the olcRTC inbounds a room can be written to. Does not call WB. LucX-UI fork only.',
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/tunnel/wb/cookies',
+        summary:
+          'Save the stream.wb.ru session used to create rooms: Cookie header (must contain wbx-refresh), JSON cookie export, or "Bearer …" token — one per line. Replaces the stored session. LucX-UI fork only.',
+        body: '{\n  "cookie_string": "wbx-refresh=…; _wbauid=…"\n}',
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/tunnel/wb/cookies/clear',
+        summary: 'Delete the stored WB Stream session (room history is kept). LucX-UI fork only.',
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/tunnel/wb/create',
+        summary:
+          'Create a WB Stream room with the stored session (bearer renewed via slide-v3 when needed). With apply=true and inbound_id it also writes roomId into that local olcRTC inbound (provider must be wbstream); the reconcile job restarts olcrtc. LucX-UI fork only.',
+        body: '{\n  "apply": true,\n  "inbound_id": 3\n}',
+        response:
+          '{\n  "success": true,\n  "obj": {\n    "room_id": "0b7d1c7e-1f2a-4b3c-9d8e-123456789abc",\n    "join_link": "https://stream.wb.ru/room/0b7d1c7e-1f2a-4b3c-9d8e-123456789abc",\n    "applied_inbound_id": 3,\n    "cookies_ok": true\n  }\n}',
+      },
+      {
+        method: 'GET',
         path: '/panel/api/tunnel/qwdtt/status',
         summary:
           'Full status of the qWDTT core: process probe, binary presence, stored config, qwdtt:// / wdtt:// URIs and subscription JSON. LucX-UI only.',

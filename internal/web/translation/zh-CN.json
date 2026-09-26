@@ -704,6 +704,16 @@
         },
         "verifyPeerCertByName": "按名称验证对端证书",
         "autoFill": "自动填充",
+      "templates": {
+        "button": "模板",
+        "applied": "已应用模板",
+        "vlessXhttpReality": "VLESS + XHTTP + Reality",
+        "vlessGrpcReality": "VLESS + gRPC + Reality",
+        "vlessGrpcTls": "VLESS + gRPC + TLS",
+        "vlessWsTls": "VLESS + WS + TLS",
+        "vlessHttpupgradeTls": "VLESS + HTTPUpgrade + TLS",
+        "vlessKcp": "VLESS + KCP"
+      },
         "awgBrowserProfile": "浏览器配置文件",
         "awgBrowserProfileHint": "TLS 配置文件要模拟的浏览器 TLS 指纹。Chrome 使用 GREASE；Firefox 使用带填充的 NSS 顺序；Safari 使用 Apple 顺序。",
         "awgBrowserChrome": "Chrome（最新）",

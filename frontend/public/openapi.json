@@ -8469,6 +8469,162 @@
         }
       }
     },
+    "/panel/api/tunnel/wb/status": {
+      "get": {
+        "tags": [
+          "Tunnel tools"
+        ],
+        "summary": "WB Stream room generator (olcRTC provider wbstream): stored stream.wb.ru session health (cookie names only, never values), bearer expiry, last error, recent rooms and the olcRTC inbounds a room can be written to. Does not call WB. LucX-UI fork only.",
+        "operationId": "get_panel_api_tunnel_wb_status",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "msg": {
+                      "type": "string"
+                    },
+                    "obj": {}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/panel/api/tunnel/wb/cookies": {
+      "post": {
+        "tags": [
+          "Tunnel tools"
+        ],
+        "summary": "Save the stream.wb.ru session used to create rooms: Cookie header (must contain wbx-refresh), JSON cookie export, or \"Bearer …\" token — one per line. Replaces the stored session. LucX-UI fork only.",
+        "operationId": "post_panel_api_tunnel_wb_cookies",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "cookie_string": "wbx-refresh=…; _wbauid=…"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "msg": {
+                      "type": "string"
+                    },
+                    "obj": {}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/panel/api/tunnel/wb/cookies/clear": {
+      "post": {
+        "tags": [
+          "Tunnel tools"
+        ],
+        "summary": "Delete the stored WB Stream session (room history is kept). LucX-UI fork only.",
+        "operationId": "post_panel_api_tunnel_wb_cookies_clear",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "msg": {
+                      "type": "string"
+                    },
+                    "obj": {}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/panel/api/tunnel/wb/create": {
+      "post": {
+        "tags": [
+          "Tunnel tools"
+        ],
+        "summary": "Create a WB Stream room with the stored session (bearer renewed via slide-v3 when needed). With apply=true and inbound_id it also writes roomId into that local olcRTC inbound (provider must be wbstream); the reconcile job restarts olcrtc. LucX-UI fork only.",
+        "operationId": "post_panel_api_tunnel_wb_create",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "apply": true,
+                "inbound_id": 3
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "msg": {
+                      "type": "string"
+                    },
+                    "obj": {}
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "obj": {
+                    "room_id": "0b7d1c7e-1f2a-4b3c-9d8e-123456789abc",
+                    "join_link": "https://stream.wb.ru/room/0b7d1c7e-1f2a-4b3c-9d8e-123456789abc",
+                    "applied_inbound_id": 3,
+                    "cookies_ok": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/panel/api/tunnel/qwdtt/status": {
       "get": {
         "tags": [

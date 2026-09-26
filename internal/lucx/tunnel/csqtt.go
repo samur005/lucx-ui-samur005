@@ -40,6 +40,9 @@ type CsqttConfig struct {
 
 	RouteThroughXray bool   `json:"routeThroughXray"`
 	OutboundTag      string `json:"outboundTag"`
+
+	// nodeManaged: see QwdttConfig.nodeManaged (never serialized).
+	nodeManaged bool
 }
 
 func DefaultCsqttConfig() CsqttConfig {
@@ -94,7 +97,7 @@ func (c CsqttConfig) publicPort() int {
 }
 
 func (c CsqttConfig) EnsureSubHost() CsqttConfig {
-	if strings.TrimSpace(c.SubHost) != "" {
+	if strings.TrimSpace(c.SubHost) != "" || c.nodeManaged {
 		return c
 	}
 	ip := detectOutboundIPv4()
