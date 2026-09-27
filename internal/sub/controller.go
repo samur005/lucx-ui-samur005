@@ -529,6 +529,11 @@ func (a *SUBController) subs(c *gin.Context) {
 	if err != nil || subs == nil {
 		writeSubError(c, err)
 	} else {
+		// LUCX-HOOK: the qWDTT Android app reads one URI per subscription body;
+		// give it the multi-profile JSON instead (qwdtt_app_sub.go).
+		if IsQwdttAppClient(userAgent) && a.serveQwdttAppSubscription(c, subReq, subId, subs, traffic, scheme, hostWithPort) {
+			return
+		}
 		var result strings.Builder
 		for _, sub := range subs {
 			result.WriteString(sub)
