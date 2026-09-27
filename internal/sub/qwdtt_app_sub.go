@@ -107,7 +107,8 @@ func qwdttAppProfiles(links []string) []tunnel.QwdttSubProfile {
 const bytesPerMiB = 1024 * 1024
 
 // qwdttAppTrafficMb returns the client's used (up+down) and limit traffic in
-// MiB, rounded to 0.01. A zero limit means unlimited and is left out.
+// MiB, rounded to 0.01. Used is always sent (0 included); a zero limit means
+// unlimited and is left out.
 func qwdttAppTrafficMb(traffic xray.ClientTraffic) (used, limit float64) {
 	toMb := func(b int64) float64 {
 		if b <= 0 {
@@ -134,7 +135,7 @@ func buildQwdttAppSubscription(links []string, title string, traffic xray.Client
 	used, limit := qwdttAppTrafficMb(traffic)
 	doc := tunnel.QwdttSubscription{
 		SubscriptionName: name,
-		TrafficUsedMb:    used,
+		TrafficUsedMb:    &used,
 		TrafficLimitMb:   limit,
 		Version:          1,
 		UpdatedAt:        now.Format("2006-01-02"),

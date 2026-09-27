@@ -324,8 +324,10 @@ type QwdttSubscription struct {
 	SubscriptionName string `json:"subscriptionName"`
 	Description      string `json:"description,omitempty"`
 	// LUCX-HOOK: subscription traffic in MiB for the app's subscription card
-	// ("Трафик: used из limit"); omitted when zero (limit 0 = unlimited).
-	TrafficUsedMb  float64           `json:"trafficUsedMb,omitempty"`
+	// ("Трафик: used из limit"). TrafficUsedMb is a pointer so the app
+	// subscription always sends it (0 included) while the panel-UI document
+	// (nil) leaves it out; TrafficLimitMb is omitted when zero (unlimited).
+	TrafficUsedMb  *float64          `json:"trafficUsedMb,omitempty"`
 	TrafficLimitMb float64           `json:"trafficLimitMb,omitempty"`
 	Version        int               `json:"version"`
 	UpdatedAt      string            `json:"updatedAt"`

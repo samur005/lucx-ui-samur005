@@ -78,10 +78,40 @@ func TestBuildQwdttAppSubscription(t *testing.T) {
 	if doc.Profiles[0].Peer != "1.1.1.1:56000" || doc.Profiles[1].Peer != "2.2.2.2:56000" || doc.Profiles[1].Workers != 8 || doc.Profiles[1].Port != 9001 {
 		t.Fatalf("unexpected profiles: %+v", doc.Profiles)
 	}
-	// No traffic yet and no limit: both numbers are left out, so the app
-	// shows no traffic line (its defaults are 0).
-	if strings.Contains(string(body), "trafficUsedMb") || strings.Contains(string(body), "trafficLimitMb") {
-		t.Fatalf("zero traffic must be omitted: %s", body)
+	// No traffic yet and no limit: used is still sent as 0, the limit is left
+	// out (unlimited).
+	if !strings.Contains(string(body), `"trafficUsedMb":0,`) {
+		t.Fatalf("zero usage must be sent as trafficUsedMb 0: %s", body)
+	}
+	if strings.Contains(string(body), "trafficLimitMb") {
+		t.Fatalf("zero limit must be omitted: %s", body)
+	}
+	if doc.TrafficUsedMb == nil || *doc.TrafficUsedMb != 0 || doc.TrafficLimitMb != 0 {
+		t.Fatalf("unexpected traffic: used=%v limit=%v", doc.TrafficUsedMb, doc.TrafficLimitMb)
+	}
+
+	// Usage that rounds to 0.00 MiB (a few hundred bytes) is also sent as 0.
+	body, ok = buildQwdttAppSubscription([]string{a}, "T", xray.ClientTraffic{Down: 672, Total: 100 * 1024 * 1024 * 1024}, time.Now())
+	if !ok || !strings.Contains(string(body), `"trafficUsedMb":0,"trafficLimitMb":102400,`) {
+		t.Fatalf("tiny usage must be sent as trafficUsedMb 0 with the limit: ok=%v %s", ok, body)
+	}
+
+	// Non-zero usage without a limit: the value is sent, the limit is omitted.
+	body, ok = buildQwdttAppSubscription([]string{a}, "T", xray.ClientTraffic{Up: 54363, Down: 91902}, time.Now())
+	if !ok || !strings.Contains(string(body), `"trafficUsedMb":0.14,`) || strings.Contains(string(body), "trafficLimitMb") {
+		t.Fatalf("usage 0.14 MiB without limit: ok=%v %s", ok, body)
+	}
+}
+
+// The panel-UI document (QwdttConfig.Subscription) carries no traffic, so
+// neither field appears there.
+func TestQwdttConfigSubscriptionJSONHasNoTraffic(t *testing.T) {
+	js, err := tunnel.QwdttConfig{Remark: "A", SubHost: "1.1.1.1:56000", Workers: 16, ClientPort: 9000, Password: "pa"}.SubscriptionJSON()
+	if err != nil {
+		t.Fatalf("SubscriptionJSON: %v", err)
+	}
+	if strings.Contains(js, "trafficUsedMb") || strings.Contains(js, "trafficLimitMb") {
+		t.Fatalf("panel-UI subscription must not carry traffic: %s", js)
 	}
 }
 
