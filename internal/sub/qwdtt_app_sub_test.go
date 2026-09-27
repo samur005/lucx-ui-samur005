@@ -14,6 +14,7 @@ import (
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 	"github.com/mhsanaei/3x-ui/v3/internal/lucx/tunnel"
+	"github.com/mhsanaei/3x-ui/v3/internal/xray"
 )
 
 // qwdttAppUA is the exact User-Agent of SpaceNeuroX SubscriptionImport.fetch.
@@ -58,12 +59,12 @@ func TestQwdttProfileFromURI_RoundTripsClientURI(t *testing.T) {
 }
 
 func TestBuildQwdttAppSubscription(t *testing.T) {
-	if _, ok := buildQwdttAppSubscription([]string{"vless://a@h:1#x", "trojan://b@h:2#y"}, "T", time.Now()); ok {
+	if _, ok := buildQwdttAppSubscription([]string{"vless://a@h:1#x", "trojan://b@h:2#y"}, "T", xray.ClientTraffic{}, time.Now()); ok {
 		t.Fatal("links without qwdtt must fall back (ok=false)")
 	}
 	a := tunnel.QwdttConfig{Remark: "A", SubHost: "1.1.1.1:56000", Workers: 16, ClientPort: 9000, Password: "pa"}.ClientURI()
 	b := tunnel.QwdttConfig{Remark: "B", SubHost: "2.2.2.2:56000", Workers: 8, ClientPort: 9001, Password: "pb"}.ClientURI()
-	body, ok := buildQwdttAppSubscription([]string{"vless://a@h:1#x", a + "\n" + b}, "", time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC))
+	body, ok := buildQwdttAppSubscription([]string{"vless://a@h:1#x", a + "\n" + b}, "", xray.ClientTraffic{}, time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC))
 	if !ok {
 		t.Fatal("want ok")
 	}
@@ -76,6 +77,31 @@ func TestBuildQwdttAppSubscription(t *testing.T) {
 	}
 	if doc.Profiles[0].Peer != "1.1.1.1:56000" || doc.Profiles[1].Peer != "2.2.2.2:56000" || doc.Profiles[1].Workers != 8 || doc.Profiles[1].Port != 9001 {
 		t.Fatalf("unexpected profiles: %+v", doc.Profiles)
+	}
+	// No traffic yet and no limit: both numbers are left out, so the app
+	// shows no traffic line (its defaults are 0).
+	if strings.Contains(string(body), "trafficUsedMb") || strings.Contains(string(body), "trafficLimitMb") {
+		t.Fatalf("zero traffic must be omitted: %s", body)
+	}
+}
+
+func TestQwdttAppTrafficMb(t *testing.T) {
+	const mib = 1024 * 1024
+	cases := []struct {
+		name        string
+		traffic     xray.ClientTraffic
+		used, limit float64
+	}{
+		{"empty", xray.ClientTraffic{}, 0, 0},
+		{"unlimited", xray.ClientTraffic{Up: 54363, Down: 91902}, 0.14, 0},
+		{"100GiB limit", xray.ClientTraffic{Up: 3 * mib, Down: 7*mib + mib/2, Total: 100 * 1024 * mib}, 10.5, 102400},
+		{"negative ignored", xray.ClientTraffic{Up: -5, Down: 0, Total: -1}, 0, 0},
+	}
+	for _, tc := range cases {
+		used, limit := qwdttAppTrafficMb(tc.traffic)
+		if used != tc.used || limit != tc.limit {
+			t.Errorf("%s: got used=%v limit=%v, want used=%v limit=%v", tc.name, used, limit, tc.used, tc.limit)
+		}
 	}
 }
 
@@ -221,5 +247,39 @@ func TestQwdttAppSubscription_NoQwdttFallsBackToRaw(t *testing.T) {
 	other := fetchSub(t, router, "s-vl", "v2rayN/6.45").Body.String()
 	if app != other {
 		t.Fatalf("without qWDTT inbounds the app must get the regular body\napp=%q\nraw=%q", app, other)
+	}
+}
+
+func TestQwdttAppSubscription_Traffic(t *testing.T) {
+	seedSubDB(t)
+	seedQwdttAppSub(t, "s-qw")
+	const mib = 1024 * 1024
+	if err := database.GetDB().Create(&xray.ClientTraffic{
+		Email: "qw@e", Enable: true, Up: 3 * mib, Down: 7*mib + mib/2, Total: 100 * 1024 * mib,
+	}).Error; err != nil {
+		t.Fatalf("seed traffic: %v", err)
+	}
+
+	resp := fetchSub(t, qwdttAppRouter(WithSUBEncryption(false)), "s-qw", qwdttAppUA)
+	var doc struct {
+		TrafficUsedMb  float64                  `json:"trafficUsedMb"`
+		TrafficLimitMb float64                  `json:"trafficLimitMb"`
+		Profiles       []tunnel.QwdttSubProfile `json:"profiles"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("json: %v (%s)", err, resp.Body.String())
+	}
+	if doc.TrafficUsedMb != 10.5 || doc.TrafficLimitMb != 102400 {
+		t.Fatalf("traffic = %v / %v MiB, want 10.5 / 102400 (%s)", doc.TrafficUsedMb, doc.TrafficLimitMb, resp.Body.String())
+	}
+	if len(doc.Profiles) != 2 {
+		t.Fatalf("profiles = %d, want 2", len(doc.Profiles))
+	}
+	// Same numbers as the Subscription-Userinfo header the other clients get.
+	info := resp.Header().Get("Subscription-Userinfo")
+	for _, want := range []string{"upload=3145728", "download=7864320", "total=107374182400"} {
+		if !strings.Contains(info, want) {
+			t.Errorf("Subscription-Userinfo %q lacks %q", info, want)
+		}
 	}
 }

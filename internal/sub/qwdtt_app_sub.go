@@ -9,11 +9,16 @@ package sub
 // parser accepts a JSON document {subscriptionName, profiles:[...]} (plain or
 // base64), so for that User-Agent we re-emit the already generated qwdtt://
 // links as that JSON. Every other User-Agent keeps the line-based body.
+//
+// Traffic: the app ignores response headers (Subscription-Userinfo) and only
+// reads the top-level trafficUsedMb / trafficLimitMb numbers (MiB) of the JSON
+// for its subscription card, so the client's usage is emitted there too.
 
 import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"math"
 	"net/url"
 	"strconv"
 	"strings"
@@ -97,10 +102,27 @@ func qwdttAppProfiles(links []string) []tunnel.QwdttSubProfile {
 	return profiles
 }
 
+// bytesPerMiB converts the client's byte counters to the app's "Mb" unit (the
+// app renders values >= 1024 as GB = value/1024).
+const bytesPerMiB = 1024 * 1024
+
+// qwdttAppTrafficMb returns the client's used (up+down) and limit traffic in
+// MiB, rounded to 0.01. A zero limit means unlimited and is left out.
+func qwdttAppTrafficMb(traffic xray.ClientTraffic) (used, limit float64) {
+	toMb := func(b int64) float64 {
+		if b <= 0 {
+			return 0
+		}
+		return math.Round(float64(b)/bytesPerMiB*100) / 100
+	}
+	return toMb(traffic.Up + traffic.Down), toMb(traffic.Total)
+}
+
 // buildQwdttAppSubscription renders the app's subscription JSON for the given
 // links. ok is false when the links contain no qWDTT profile, in which case the
-// caller must fall back to the regular line-based body.
-func buildQwdttAppSubscription(links []string, title string, now time.Time) ([]byte, bool) {
+// caller must fall back to the regular line-based body. traffic is the same
+// aggregate the Subscription-Userinfo header is built from.
+func buildQwdttAppSubscription(links []string, title string, traffic xray.ClientTraffic, now time.Time) ([]byte, bool) {
 	profiles := qwdttAppProfiles(links)
 	if len(profiles) == 0 {
 		return nil, false
@@ -109,8 +131,11 @@ func buildQwdttAppSubscription(links []string, title string, now time.Time) ([]b
 	if name == "" {
 		name = "qWDTT"
 	}
+	used, limit := qwdttAppTrafficMb(traffic)
 	doc := tunnel.QwdttSubscription{
 		SubscriptionName: name,
+		TrafficUsedMb:    used,
+		TrafficLimitMb:   limit,
 		Version:          1,
 		UpdatedAt:        now.Format("2006-01-02"),
 		Profiles:         profiles,
@@ -134,7 +159,7 @@ func (a *SUBController) serveQwdttAppSubscription(c *gin.Context, subReq *SubSer
 	if strings.TrimSpace(title) == "" {
 		title = a.subTitle
 	}
-	body, ok := buildQwdttAppSubscription(links, title, time.Now())
+	body, ok := buildQwdttAppSubscription(links, title, traffic, time.Now())
 	if !ok {
 		return false
 	}

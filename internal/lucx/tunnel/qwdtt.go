@@ -321,11 +321,15 @@ type QwdttSubProfile struct {
 // QwdttSubscription is the public JSON document the Android client imports
 // (SpaceNeuroX subscription format).
 type QwdttSubscription struct {
-	SubscriptionName string            `json:"subscriptionName"`
-	Description      string            `json:"description,omitempty"`
-	Version          int               `json:"version"`
-	UpdatedAt        string            `json:"updatedAt"`
-	Profiles         []QwdttSubProfile `json:"profiles"`
+	SubscriptionName string `json:"subscriptionName"`
+	Description      string `json:"description,omitempty"`
+	// LUCX-HOOK: subscription traffic in MiB for the app's subscription card
+	// ("Трафик: used из limit"); omitted when zero (limit 0 = unlimited).
+	TrafficUsedMb  float64           `json:"trafficUsedMb,omitempty"`
+	TrafficLimitMb float64           `json:"trafficLimitMb,omitempty"`
+	Version        int               `json:"version"`
+	UpdatedAt      string            `json:"updatedAt"`
+	Profiles       []QwdttSubProfile `json:"profiles"`
 }
 
 // Subscription builds the Android subscription document. Returns an error
