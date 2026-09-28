@@ -507,6 +507,14 @@ func (a *SUBController) subs(c *gin.Context) {
 		logSubscriptionRoute(userAgent, "html")
 		return
 	}
+	// LUCX-HOOK: the qWDTT Android app never sends X-HWID, so a client with a
+	// device limit got 404 there. For that User-Agent without X-HWID the qWDTT
+	// JSON is served before the HWID gate (serveQwdttAppNoHwid); when the
+	// subscription has no qWDTT profile the request falls through to the
+	// regular HWID gate, so every other body stays HWID-enforced as before.
+	if a.serveQwdttAppNoHwid(c, userAgent) {
+		return
+	}
 	if !a.enforceHwid(c) {
 		return
 	}

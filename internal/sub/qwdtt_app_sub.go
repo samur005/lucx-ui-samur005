@@ -13,11 +13,20 @@ package sub
 // Traffic: the app ignores response headers (Subscription-Userinfo) and only
 // reads the top-level trafficUsedMb / trafficLimitMb numbers (MiB) of the JSON
 // for its subscription card, so the client's usage is emitted there too.
+//
+// Description: like the WDTT panel's qWDTT JSON, "Подписка · до DD.MM.YYYY"
+// (UTC+7), "Подписка · бессрочно", or "Подписка · N дн. с первого
+// подключения" for a delayed-start client that has not connected yet.
+//
+// HWID: the app never sends X-HWID, so for its User-Agent without X-HWID the
+// qWDTT JSON is served before the device-limit gate (serveQwdttAppNoHwid).
+// The JSON carries only the qWDTT profiles; any other body stays gated.
 
 import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/url"
 	"strconv"
@@ -26,6 +35,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/mhsanaei/3x-ui/v3/internal/database"
+	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 	"github.com/mhsanaei/3x-ui/v3/internal/lucx/tunnel"
 	"github.com/mhsanaei/3x-ui/v3/internal/xray"
 )
@@ -124,6 +135,50 @@ func qwdttAppTrafficMb(traffic xray.ClientTraffic) (used, limit float64) {
 // caller must fall back to the regular line-based body. traffic is the same
 // aggregate the Subscription-Userinfo header is built from.
 func buildQwdttAppSubscription(links []string, title string, traffic xray.ClientTraffic, now time.Time) ([]byte, bool) {
+	return buildQwdttAppSubscriptionDesc(links, title, qwdttAppDescription(traffic.ExpiryTime, 0), traffic, now)
+}
+
+// qwdttAppDescriptionZone is the owner's timezone for the expiry date on the
+// app's subscription card (Asia/Novosibirsk, UTC+7, no DST — the same date
+// the Telegram bot showed). Fixed zone: no tzdata dependency.
+var qwdttAppDescriptionZone = time.FixedZone("UTC+7", 7*60*60)
+
+const msPerDay = int64(24 * time.Hour / time.Millisecond)
+
+// qwdttAppDescription renders the card's description. expiryMs is the
+// subscription expiry (ms, 0 = unlimited); delayedMs > 0 is the duration of a
+// delayed-start client ("days from first use") that has not started yet.
+func qwdttAppDescription(expiryMs, delayedMs int64) string {
+	switch {
+	case delayedMs > 0:
+		days := (delayedMs + msPerDay - 1) / msPerDay
+		return fmt.Sprintf("Подписка · %d дн. с первого подключения", days)
+	case expiryMs > 0:
+		return "Подписка · до " + time.UnixMilli(expiryMs).In(qwdttAppDescriptionZone).Format("02.01.2006")
+	default:
+		return "Подписка · бессрочно"
+	}
+}
+
+// qwdttAppDelayedStartMs returns the delayed-start duration (ms) when an
+// enabled client of subId still has a negative expiry (not started yet), else 0.
+// getSubs normalises such expiry to now+duration, which would drift daily.
+func qwdttAppDelayedStartMs(subId string) int64 {
+	db := database.GetDB()
+	if db == nil || strings.TrimSpace(subId) == "" {
+		return 0
+	}
+	var v int64
+	if err := db.Model(&model.ClientRecord{}).
+		Where("sub_id = ? AND enable = ? AND expiry_time < 0", subId, true).
+		Select("COALESCE(MIN(expiry_time), 0)").
+		Scan(&v).Error; err != nil || v >= 0 {
+		return 0
+	}
+	return -v
+}
+
+func buildQwdttAppSubscriptionDesc(links []string, title, description string, traffic xray.ClientTraffic, now time.Time) ([]byte, bool) {
 	profiles := qwdttAppProfiles(links)
 	if len(profiles) == 0 {
 		return nil, false
@@ -135,6 +190,7 @@ func buildQwdttAppSubscription(links []string, title string, traffic xray.Client
 	used, limit := qwdttAppTrafficMb(traffic)
 	doc := tunnel.QwdttSubscription{
 		SubscriptionName: name,
+		Description:      description,
 		TrafficUsedMb:    &used,
 		TrafficLimitMb:   limit,
 		Version:          1,
@@ -160,7 +216,8 @@ func (a *SUBController) serveQwdttAppSubscription(c *gin.Context, subReq *SubSer
 	if strings.TrimSpace(title) == "" {
 		title = a.subTitle
 	}
-	body, ok := buildQwdttAppSubscription(links, title, traffic, time.Now())
+	description := qwdttAppDescription(traffic.ExpiryTime, qwdttAppDelayedStartMs(subId))
+	body, ok := buildQwdttAppSubscriptionDesc(links, title, description, traffic, time.Now())
 	if !ok {
 		return false
 	}
@@ -174,4 +231,26 @@ func (a *SUBController) serveQwdttAppSubscription(c *gin.Context, subReq *SubSer
 	}
 	a.recordSubscriptionFetch(c)
 	return true
+}
+
+// serveQwdttAppNoHwid serves the qWDTT app (User-Agent qWDTT-Subscription/…)
+// when it sends no X-HWID: the app cannot send one, and the device-limit gate
+// would answer 404 for every client with a limit. Returns false, without
+// writing anything, for other requests and when the subscription has no qWDTT
+// profile — the caller then applies the regular HWID gate, so non-qWDTT bodies
+// are never served ungated. Unknown subId -> 404, DB error -> 500 (as before).
+func (a *SUBController) serveQwdttAppNoHwid(c *gin.Context, userAgent string) bool {
+	if !IsQwdttAppClient(userAgent) || strings.TrimSpace(c.GetHeader("X-HWID")) != "" {
+		return false
+	}
+	subId := c.Param("subid")
+	scheme, host, hostWithPort, _ := a.subService.ResolveRequest(c)
+	subReq := a.subService.ForRequest(host)
+	subReq.subscriptionBody = true
+	subs, _, _, traffic, err := subReq.getSubs(subId)
+	if err != nil || subs == nil {
+		writeSubError(c, err)
+		return true
+	}
+	return a.serveQwdttAppSubscription(c, subReq, subId, subs, traffic, scheme, hostWithPort)
 }

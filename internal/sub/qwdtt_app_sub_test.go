@@ -313,3 +313,138 @@ func TestQwdttAppSubscription_Traffic(t *testing.T) {
 		}
 	}
 }
+
+func TestQwdttAppDescription(t *testing.T) {
+	// 27.10.2026 20:31 UTC is already 28.10 in UTC+7.
+	exp := time.Date(2026, 10, 27, 20, 31, 0, 0, time.UTC).UnixMilli()
+	cases := []struct {
+		name            string
+		expiry, delayed int64
+		want            string
+	}{
+		{"date in UTC+7", exp, 0, "Подписка · до 28.10.2026"},
+		{"unlimited", 0, 0, "Подписка · бессрочно"},
+		{"negative expiry treated as unlimited here", -1, 0, "Подписка · бессрочно"},
+		{"delayed 30 days", exp, 30 * msPerDay, "Подписка · 30 дн. с первого подключения"},
+		{"delayed rounds up", 0, 30*msPerDay + 1, "Подписка · 31 дн. с первого подключения"},
+	}
+	for _, tc := range cases {
+		if got := qwdttAppDescription(tc.expiry, tc.delayed); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func fetchSubHwid(t *testing.T, router *gin.Engine, subId, ua, hwid string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "http://sub.example.com/sub/"+subId, nil)
+	if ua != "" {
+		req.Header.Set("User-Agent", ua)
+	}
+	if hwid != "" {
+		req.Header.Set("X-HWID", hwid)
+	}
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	return resp
+}
+
+func decodeQwdttApp(t *testing.T, resp *httptest.ResponseRecorder) tunnel.QwdttSubscription {
+	t.Helper()
+	var doc tunnel.QwdttSubscription
+	if err := json.Unmarshal(resp.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("json: %v (%s)", err, resp.Body.String())
+	}
+	return doc
+}
+
+// A device-limited client: the qWDTT app (no X-HWID) gets its JSON, every
+// other client without X-HWID keeps the 404 of the HWID gate.
+func TestQwdttAppSubscription_HwidLimitNoHwid(t *testing.T) {
+	seedSubDB(t)
+	seedQwdttAppSub(t, "s-qw")
+	if err := database.GetDB().Model(&model.ClientRecord{}).Where("email = ?", "qw@e").Update("limit_hwid", 3).Error; err != nil {
+		t.Fatalf("set limit: %v", err)
+	}
+	router := qwdttAppRouter(WithSUBEncryption(false))
+
+	resp := fetchSubHwid(t, router, "s-qw", qwdttAppUA, "")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("qWDTT app without X-HWID: status %d, want 200", resp.Code)
+	}
+	if doc := decodeQwdttApp(t, resp); len(doc.Profiles) != 2 {
+		t.Fatalf("profiles = %+v, want 2", doc.Profiles)
+	}
+	if resp.Header().Get("Subscription-Userinfo") == "" {
+		t.Errorf("Subscription-Userinfo missing")
+	}
+	var n int64
+	database.GetDB().Model(&model.ClientHwid{}).Where("sub_id = ?", "s-qw").Count(&n)
+	if n != 0 {
+		t.Errorf("no device must be registered without X-HWID, got %d", n)
+	}
+	for _, ua := range []string{"", "Happ/1.0", "v2rayNG/1.8.5"} {
+		if got := fetchSubHwid(t, router, "s-qw", ua, "").Code; got != http.StatusNotFound {
+			t.Errorf("UA %q without X-HWID: status %d, want 404 (HWID gate)", ua, got)
+		}
+	}
+	// With X-HWID the app still goes through the regular gate (registers).
+	if got := fetchSubHwid(t, router, "s-qw", qwdttAppUA, "device-abcdef").Code; got != http.StatusOK {
+		t.Errorf("qWDTT app with X-HWID: status %d, want 200", got)
+	}
+	database.GetDB().Model(&model.ClientHwid{}).Where("sub_id = ?", "s-qw").Count(&n)
+	if n != 1 {
+		t.Errorf("X-HWID request must register one device, got %d", n)
+	}
+	if got := fetchSubHwid(t, router, "unknown-sub", qwdttAppUA, "").Code; got != http.StatusNotFound {
+		t.Errorf("unknown subId: status %d, want 404", got)
+	}
+}
+
+// Without a qWDTT profile the no-HWID shortcut must not serve anything: the
+// HWID gate still answers 404 for a device-limited client.
+func TestQwdttAppSubscription_HwidLimitNoQwdttStaysGated(t *testing.T) {
+	seedSubDB(t)
+	seedSubInbound(t, "s-vl", "vless-only", 8443, 1, `{"network":"tcp","security":"none"}`)
+	if err := database.GetDB().Model(&model.ClientRecord{}).Where("sub_id = ?", "s-vl").Update("limit_hwid", 2).Error; err != nil {
+		t.Fatalf("set limit: %v", err)
+	}
+	router := qwdttAppRouter()
+	if got := fetchSubHwid(t, router, "s-vl", qwdttAppUA, "").Code; got != http.StatusNotFound {
+		t.Fatalf("qWDTT UA, no qWDTT profile, limited client: status %d, want 404", got)
+	}
+}
+
+func TestQwdttAppSubscription_Description(t *testing.T) {
+	seedSubDB(t)
+	seedQwdttAppSub(t, "s-qw")
+	exp := time.Date(2026, 10, 27, 20, 31, 0, 0, time.UTC).UnixMilli()
+	if err := database.GetDB().Create(&xray.ClientTraffic{Email: "qw@e", Enable: true, ExpiryTime: exp}).Error; err != nil {
+		t.Fatalf("seed traffic: %v", err)
+	}
+	router := qwdttAppRouter(WithSUBEncryption(false))
+	resp := fetchSub(t, router, "s-qw", qwdttAppUA)
+	if doc := decodeQwdttApp(t, resp); doc.Description != "Подписка · до 28.10.2026" {
+		t.Fatalf("description = %q (%s)", doc.Description, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), `{"subscriptionName":"AntiBS","description":"Подписка · до 28.10.2026","trafficUsedMb":0,`) {
+		t.Errorf("unexpected field order: %s", resp.Body.String())
+	}
+	// Other User-Agents: no description anywhere in the line-based body.
+	raw := fetchSub(t, router, "s-qw", "v2rayN/6.45").Body.String()
+	if strings.Contains(raw, "Подписка") || strings.Contains(raw, "description") {
+		t.Errorf("raw body must not change: %q", raw)
+	}
+}
+
+func TestQwdttAppSubscription_DescriptionDelayedStart(t *testing.T) {
+	seedSubDB(t)
+	seedQwdttAppSub(t, "s-qw")
+	if err := database.GetDB().Model(&model.ClientRecord{}).Where("email = ?", "qw@e").Update("expiry_time", -30*msPerDay).Error; err != nil {
+		t.Fatalf("set delayed expiry: %v", err)
+	}
+	resp := fetchSub(t, qwdttAppRouter(WithSUBEncryption(false)), "s-qw", qwdttAppUA)
+	if doc := decodeQwdttApp(t, resp); doc.Description != "Подписка · 30 дн. с первого подключения" {
+		t.Fatalf("description = %q", doc.Description)
+	}
+}
