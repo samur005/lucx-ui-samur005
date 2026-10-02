@@ -7,6 +7,7 @@
 package tunnel
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -200,4 +201,48 @@ func (m *Manager) CollectQwdttTraffic(tag string) SidecarTraffic {
 		d.Sessions = 1
 	}
 	return d
+}
+
+// QwdttClientTraffic is one client's qWDTT usage since the previous poll.
+type QwdttClientTraffic struct {
+	Email    string
+	Up, Down int64
+	Online   bool
+}
+
+// CollectQwdttClientTraffic folds the per-password counters the qWDTT server
+// keeps in configDir/passwords.json into per-client deltas. byPassword maps a
+// client's personal password to its email. Clients whose password is not (yet)
+// registered on the sidecar are skipped. A client is online while its counters
+// moved within SidecarOnlineGrace (the server flushes counters about every
+// minute, so the signal lags by up to that much).
+func (m *Manager) CollectQwdttClientTraffic(tag, configDir string, byPassword map[string]string) []QwdttClientTraffic {
+	if len(byPassword) == 0 || !m.IsRunningKey(QwdttKey) {
+		return nil
+	}
+	pws := make([]string, 0, len(byPassword))
+	for pw := range byPassword {
+		pws = append(pws, pw)
+	}
+	sort.Strings(pws)
+	return m.foldQwdttClients(tag, pws, byPassword, ReadQwdttEntryStats(configDir, pws), time.Now())
+}
+
+func (m *Manager) foldQwdttClients(tag string, pws []string, byPassword map[string]string, stats map[string]QwdttEntryStats, now time.Time) []QwdttClientTraffic {
+	out := make([]QwdttClientTraffic, 0, len(stats))
+	for _, pw := range pws {
+		st, ok := stats[pw]
+		if !ok {
+			continue
+		}
+		email := byPassword[pw]
+		dUp, dDown, lastIO := m.foldDelta(QwdttKey+"-client:"+tag+":"+email, st.Up, st.Down, true, now)
+		out = append(out, QwdttClientTraffic{
+			Email:  email,
+			Up:     dUp,
+			Down:   dDown,
+			Online: sidecarOnline(lastIO, now),
+		})
+	}
+	return out
 }

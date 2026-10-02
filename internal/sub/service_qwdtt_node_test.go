@@ -47,10 +47,10 @@ func TestGenQwdttCsqttLink_NodeInboundUsesNodeAddress(t *testing.T) {
 		link string
 		want string
 	}{
-		{"qwdtt node, master IP stamped", s.genQwdttLink(qwdtt(masterIP+":56000", &nodeID)), "peer=13.143.132.172%3A56000"},
-		{"qwdtt node, empty subHost", s.genQwdttLink(qwdtt("", &nodeID)), "peer=13.143.132.172%3A56000"},
-		{"qwdtt node, explicit subHost kept", s.genQwdttLink(qwdtt("fi.example.com:56000", &nodeID)), "peer=fi.example.com%3A56000"},
-		{"qwdtt local keeps master subHost", s.genQwdttLink(qwdtt(masterIP+":56000", nil)), "peer=2.27.201.120%3A56000"},
+		{"qwdtt node, master IP stamped", s.genQwdttLink(qwdtt(masterIP+":56000", &nodeID), ""), "peer=13.143.132.172%3A56000"},
+		{"qwdtt node, empty subHost", s.genQwdttLink(qwdtt("", &nodeID), ""), "peer=13.143.132.172%3A56000"},
+		{"qwdtt node, explicit subHost kept", s.genQwdttLink(qwdtt("fi.example.com:56000", &nodeID), ""), "peer=fi.example.com%3A56000"},
+		{"qwdtt local keeps master subHost", s.genQwdttLink(qwdtt(masterIP+":56000", nil), ""), "peer=2.27.201.120%3A56000"},
 		{"csqtt node, master IP stamped", s.genCsqttLink(csqtt(masterIP, &nodeID)), "host=13.143.132.172"},
 		{"csqtt node, empty subHost", s.genCsqttLink(csqtt("", &nodeID)), "host=13.143.132.172"},
 	}
@@ -58,5 +58,47 @@ func TestGenQwdttCsqttLink_NodeInboundUsesNodeAddress(t *testing.T) {
 		if !strings.Contains(c.link, c.want) {
 			t.Errorf("%s: link %q missing %q", c.name, c.link, c.want)
 		}
+	}
+}
+
+// A known client gets its personal qWDTT password in the link; everything else
+// (no email, unknown email, disabled client) keeps the shared owner password.
+func TestGenQwdttLink_PersonalPassword(t *testing.T) {
+	ib := &model.Inbound{
+		Id: 33, Enable: true, Port: 56000, Protocol: model.Qwdtt,
+		Settings: `{"listenAddr":"0.0.0.0:56000","password":"sharedSharedShar","subHost":"1.2.3.4:56000","vkHashes":"h1","workers":16,"clientPort":9000,"remark":"M"}`,
+	}
+	s := &SubService{}
+	s.primeLinkClients(ib.Id, []model.Client{
+		{ID: "uuid-a", Email: "a@x", Enable: true},
+		{ID: "uuid-off", Email: "off@x", Enable: false},
+	}, true)
+
+	pass := func(link string) string {
+		p, ok := qwdttProfileFromURI(link)
+		if !ok {
+			t.Fatalf("not a qwdtt link: %q", link)
+		}
+		return p.Password
+	}
+	shared := pass(s.genQwdttLink(ib, ""))
+	if shared != "sharedSharedShar" {
+		t.Fatalf("empty email must keep shared password, got %q", shared)
+	}
+	if got := pass(s.GetLink(ib, "ghost@x")); got != shared {
+		t.Fatalf("unknown client must keep shared password, got %q", got)
+	}
+	if got := pass(s.GetLink(ib, "off@x")); got != shared {
+		t.Fatalf("disabled client must keep shared password, got %q", got)
+	}
+	want := tunnel.QwdttClientPassword("sharedSharedShar", "uuid-a")
+	if got := pass(s.GetLink(ib, "a@x")); got != want || want == shared {
+		t.Fatalf("personal password = %q want %q (shared %q)", got, want, shared)
+	}
+	// Only the password differs from the shared link.
+	a := strings.ReplaceAll(s.GetLink(ib, "a@x"), want, "X")
+	b := strings.ReplaceAll(s.genQwdttLink(ib, ""), shared, "X")
+	if a != b {
+		t.Fatalf("links differ beyond the password:\n%s\n%s", a, b)
 	}
 }

@@ -799,7 +799,7 @@ func (s *SubService) GetLink(inbound *model.Inbound, email string) string {
 	case "olcrtc": // LUCX-HOOK: single-credential olcRTC URI (ignore email)
 		return s.genOlcrtcLink(inbound)
 	case "qwdtt": // LUCX-HOOK: single-credential qWDTT URI (ignore email)
-		return s.genQwdttLink(inbound)
+		return s.genQwdttLink(inbound, email)
 	case "csqtt": // LUCX-HOOK: single-credential CSQTT URI (ignore email)
 		return s.genCsqttLink(inbound)
 	case "anytls": // LUCX-HOOK: single-credential AnyTLS URI (ignore email)
@@ -3371,10 +3371,22 @@ func (s *SubService) genOlcrtcLink(inbound *model.Inbound) string {
 // whole clipboard as one URI, so a second line corrupts pass and DTLS dies.
 // EnsureSubHost fills an empty peer from the host's outbound IPv4 so export
 // works for pre-lucx.108 rows that never stored subHost (no DB write here).
-func (s *SubService) genQwdttLink(inbound *model.Inbound) string {
+//
+// LUCX-HOOK: when the subscriber is a known client of the inbound the link
+// carries that client's personal password (tunnel.QwdttClientPassword, the one
+// the panel registers on the sidecar) so the panel can tell clients apart;
+// unknown / empty email keeps the shared owner password.
+func (s *SubService) genQwdttLink(inbound *model.Inbound, email string) string {
 	cfg, ok := tunnel.QwdttConfigFromInbound(inbound)
 	if !ok || !inbound.Enable {
 		return ""
+	}
+	if email != "" && strings.TrimSpace(cfg.Password) != "" {
+		if c, found := s.clientForLink(inbound, email); found && c.Enable {
+			if pw := tunnel.QwdttClientPassword(cfg.Password, tunnel.QwdttClientKey(c.ID, c.Email)); pw != "" {
+				cfg.Password = pw
+			}
+		}
 	}
 	if strings.TrimSpace(cfg.SubHost) == "" {
 		cfg = cfg.WithPeerHost(s.resolveInboundAddress(inbound))

@@ -145,7 +145,7 @@ func seedQwdttAppSub(t *testing.T, subId string) {
 	if err := db.Create(node).Error; err != nil {
 		t.Fatalf("seed node: %v", err)
 	}
-	client := &model.ClientRecord{Email: "qw@e", SubID: subId, Enable: true}
+	client := &model.ClientRecord{Email: "qw@e", SubID: subId, UUID: "uuid-qw", Enable: true}
 	if err := db.Create(client).Error; err != nil {
 		t.Fatalf("seed client: %v", err)
 	}
@@ -221,8 +221,8 @@ func TestQwdttAppSubscription_TwoInboundsTwoProfiles(t *testing.T) {
 			t.Errorf("unexpected header fields: %+v", doc)
 		}
 		want := []tunnel.QwdttSubProfile{
-			{Name: "NL", Peer: "2.27.201.120:56000", Hashes: "hnl", Workers: 16, Port: 9000, Password: "pnl"},
-			{Name: "FI", Peer: "13.143.132.172:56000", Hashes: "hfi", Workers: 16, Port: 9000, Password: "pfi"},
+			{Name: "NL", Peer: "2.27.201.120:56000", Hashes: "hnl", Workers: 16, Port: 9000, Password: tunnel.QwdttClientPassword("pnl", "uuid-qw")},
+			{Name: "FI", Peer: "13.143.132.172:56000", Hashes: "hfi", Workers: 16, Port: 9000, Password: tunnel.QwdttClientPassword("pfi", "uuid-qw")},
 		}
 		if len(doc.Profiles) != len(want) {
 			t.Fatalf("encrypt=%v: profiles = %+v, want %d", encrypt, doc.Profiles, len(want))
