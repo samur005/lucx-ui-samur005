@@ -782,6 +782,9 @@
         "awgKeepaliveTimeoutHint": "AWG3 a nivel de dispositivo: intervalo de keepalive en segundos (a nivel de dispositivo, no por peer). 0 = predeterminado del kernel (10 s). Rango 0–65535.",
         "awgMaxHandshakeAttempts": "MaxHandshakeAttempts",
         "awgMaxHandshakeAttemptsHint": "AWG3 a nivel de dispositivo: máximo de intentos de handshake antes de que el peer se deshabilite. 0 = predeterminado del kernel (18 = 90/REKEY_TIMEOUT). Rango 0–65535.",
+        "awgRoutingMode": "Xray routing mode",
+        "awgRoutingModeHint": "Off: direct. TUN: legacy mode. TPROXY: kernel AWG, IPv4 TCP/UDP only; ICMP and IPv6 are blocked. Changing mode briefly interrupts connections. The port must be free for TCP and UDP.",
+        "awgTproxyPort": "Local TPROXY port",
         "awgRouteThroughXray": "Enrutar a través de Xray",
         "awgRouteThroughXrayHint": "Envía los paquetes descifrados de la interfaz kernel AWG al router de Xray mediante un inbound TUN inyectado, para que la salida obedezca las reglas de enrutado. Refleja el routeThroughXray de mtproto.",
         "awgRouteOutbound": "Outbound de ruta",
@@ -847,6 +850,8 @@
         "anytlsPasswordHint": "Empty = auto-generate on save",
         "anytlsSni": "SNI / domain",
         "anytlsSniHint": "Must be covered by the panel TLS certificate (x-ui SSL). Empty cert paths use Settings → Panel SSL.",
+        "anytlsRouteThroughXray": "Route through Xray",
+        "anytlsRouteThroughXrayHint": "AnyTLS outbound TCP (uid lucx-mtproxy) is redirected into an Xray SOCKS bridge. On = Xray routing rules and outbounds apply. Off = direct egress (default).",
         "tproxyNote": "Telegram WEB proxy (tproxy-server). Needs hostname:443, panel TLS cert covering the hostname, camouflage site, and binaries on Settings → Cores (tproxy-server, MTProxy, Caddy/NaiveProxy). Clients: Telegram Desktop WEB proxy. Share: t.me/webproxy",
         "tproxyHostname": "Hostname",
         "tproxyHostnameHint": "Bare DNS name, no https:// or port. Must match the TLS certificate.",
@@ -972,7 +977,7 @@
         "csqttVkHashes": "VK call hashes",
         "csqttVkHashesHint": "Comma-separated live VK TURN hashes (up to 6)",
         "csqttRouteThroughXray": "Route through Xray",
-        "csqttRouteThroughXrayHint": "Send csqtt1 packets into an Xray TUN via policy routing so egress follows routing rules / outbound. On by default. Off = binary MASQUERADE to the host NIC.",
+        "csqttRouteThroughXrayHint": "Off by default (host NAT). On sends csqtt1 into an Xray TUN so egress follows routing rules.",
         "csqttRouteOutbound": "Outbound",
         "csqttRouteOutboundHint": "Optional. Force CSQTT traffic out through this outbound (or balancer). Leave empty to let your Xray routing rules decide.",
         "csqttRouteOutboundPlaceholder": "Use routing rules"
@@ -1014,7 +1019,10 @@
         "live": "Live",
         "address": "Address",
         "version": "Version",
-        "savedDisabled": "After import the old Docker/awg3 manager is stopped and the inbound is enabled. Stacks that share 10.8.1.0/24 need different subnets before more than one kernel iface is up."
+        "savedDisabled": "After import the old Docker/awg3 manager is stopped and the inbound is enabled. Stacks that share 10.8.1.0/24 need different subnets before more than one kernel iface is up.",
+        "delete": "Delete selected",
+        "deleteConfirm": "Stop and remove the selected installs from this host? Panel inbounds are not created or deleted.",
+        "deleted": "Removed {count}."
       },
       "protocolNames": {
         "awg": "AmneziaWG (kernel)",
@@ -1871,6 +1879,11 @@
       "subHappColorProfileDesc": "Tema de color personalizado para iOS como cadena JSON, o resetcolors para restaurar los colores predeterminados.",
       "subHappPingType": "Método de ping de latencia",
       "subHappPingTypeDesc": "Cómo mide Happ la latencia de los nodos: vía proxy (GET o HEAD), TCP o ICMP.",
+      "subHappLocalProxyAuth": "Autorización del proxy local",
+      "subHappLocalProxyAuthDesc": "Envía a Happ socks-auth-mode / http-auth-mode. Sin autorización, cualquier app del dispositivo puede usar el proxy SOCKS5/HTTP local de Happ para llegar al túnel y conocer la dirección del servidor. \"Auto\" hace que Happ genere credenciales aleatorias; no requiere Provider ID.",
+      "subHappLocalProxyAuthAuto": "Auto (credenciales aleatorias)",
+      "subHappLocalProxyAuthDisable": "Desactivada",
+      "subHappLocalProxyAuthUnset": "No enviar (predeterminado del cliente)",
       "subHappAutoConnect": "Conexión automática al iniciar",
       "subHappAutoConnectDesc": "Indicar a Happ que se conecte automáticamente a la VPN al iniciarse la aplicación.",
       "subHappAutoConnectType": "Destino de la conexión automática",
@@ -2708,7 +2721,9 @@
           "apply": "Apply selected",
           "revert": "Revert",
           "applied": "Mask applied",
-          "reverted": "Mask reverted"
+          "reverted": "Mask reverted",
+      "insideSite": "Inside the site",
+      "insideHint": "WS / HTTPUpgrade share the Cover hostname. A browser on / sees the site. Refresh the subscription after Apply."
     },
     "tunnels": {
       "title": "Tunnel tools",
@@ -3284,3 +3299,4 @@
   "disable": "Deshabilitar",
   "qrTooLarge": "QR demasiado grande para mostrarlo — usa descargar o copiar"
 }
+

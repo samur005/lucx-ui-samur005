@@ -7,8 +7,10 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/netip"
 	"strings"
 
@@ -512,7 +514,16 @@ func lucxRoutesThroughXray(inbound *model.Inbound) bool {
 		olcrtcRoutesThroughXray(inbound) ||
 		mieruRoutesThroughXray(inbound) ||
 		trustTunnelRoutesThroughXray(inbound) ||
-		tproxyRoutesThroughXray(inbound)
+		tproxyRoutesThroughXray(inbound) ||
+		anytlsRoutesThroughXray(inbound)
+}
+
+func anytlsRoutesThroughXray(inbound *model.Inbound) bool {
+	if inbound == nil || inbound.Protocol != model.Anytls {
+		return false
+	}
+	cfg, ok := tunnel.AnytlsConfigFromInbound(inbound)
+	return ok && cfg.RouteThroughXray && cfg.RouteXrayPort > 0
 }
 
 func tproxyRoutesThroughXray(inbound *model.Inbound) bool {
@@ -604,6 +615,9 @@ func (s *InboundService) normalizeAnytlsSettings(inbound *model.Inbound) {
 	settings["sni"] = strings.TrimSpace(cfg.SNI)
 	settings["certFile"] = strings.TrimSpace(cfg.CertFile)
 	settings["keyFile"] = strings.TrimSpace(cfg.KeyFile)
+	settings["routeThroughXray"] = cfg.RouteThroughXray
+	settings["routeXrayPort"] = cfg.RouteXrayPort
+	settings["outboundTag"] = strings.TrimSpace(cfg.OutboundTag)
 	if strings.TrimSpace(cfg.Remark) != "" {
 		settings["remark"] = cfg.Remark
 	}
@@ -614,6 +628,10 @@ func (s *InboundService) normalizeAnytlsSettings(inbound *model.Inbound) {
 	if inbound.Remark == "" && strings.TrimSpace(cfg.Remark) != "" {
 		inbound.Remark = cfg.Remark
 	}
+}
+
+func (s *InboundService) normalizeAnytlsXrayPort(inbound *model.Inbound, oldSettings string) error {
+	return s.normalizeSidecarXrayPort(inbound, oldSettings, model.Anytls, "anytls")
 }
 
 func (s *InboundService) validateAnytlsCert(inbound *model.Inbound) error {
@@ -1168,7 +1186,108 @@ func (s *InboundService) addInbound(inbound *model.Inbound, allowAwgOverlap bool
 	return s.AddInbound(inbound)
 }
 
+func (s *InboundService) checkAwgTproxyPort(inbound *model.Inbound) error {
+	if inbound == nil || inbound.Protocol != model.AWG {
+		return nil
+	}
+	var cfg struct {
+		RouteThroughXray bool   `json:"routeThroughXray"`
+		XrayRoutingMode  string `json:"xrayRoutingMode"`
+		TproxyPort       int    `json:"tproxyPort"`
+	}
+	if err := json.Unmarshal([]byte(inbound.Settings), &cfg); err != nil {
+		return err
+	}
+	if !cfg.RouteThroughXray || cfg.XrayRoutingMode != "tproxy" {
+		return nil
+	}
+	if inbound.NodeID != nil {
+		return fmt.Errorf("awg: TPROXY currently requires a local kernel inbound")
+	}
+	if !awg.KernelAvailable() {
+		return fmt.Errorf("awg: TPROXY requires the AmneziaWG kernel module")
+	}
+	if err := awg.ValidateTproxySettings(inbound.Settings); err != nil {
+		return err
+	}
+	port := cfg.TproxyPort
+	if port == inbound.Port {
+		return fmt.Errorf("awg: TPROXY port conflicts with the AWG listener")
+	}
+	probe := *inbound
+	probe.Protocol, probe.Listen, probe.Port = model.Tunnel, "127.0.0.1", port
+	probe.Settings = `{"allowedNetwork":"tcp,udp"}`
+	if conflict, err := s.checkPortConflict(&probe, inbound.Id); err != nil {
+		return err
+	} else if conflict != nil {
+		return fmt.Errorf("awg: TPROXY %s", conflict.String())
+	}
+	webPort, err := (&SettingService{}).GetPort()
+	if err != nil {
+		return err
+	}
+	if port == webPort {
+		return fmt.Errorf("awg: TPROXY port conflicts with the panel")
+	}
+	inbounds, err := s.GetAllInbounds()
+	if err != nil {
+		return err
+	}
+	unchanged := false
+	for _, other := range inbounds {
+		if other == nil || other.NodeID != nil {
+			continue
+		}
+		if other.Id == inbound.Id {
+			var old struct {
+				RouteThroughXray bool   `json:"routeThroughXray"`
+				XrayRoutingMode  string `json:"xrayRoutingMode"`
+				TproxyPort       int    `json:"tproxyPort"`
+			}
+			_ = json.Unmarshal([]byte(other.Settings), &old)
+			unchanged = other.Enable && old.RouteThroughXray && old.XrayRoutingMode == "tproxy" && old.TproxyPort == port
+			continue
+		}
+		for _, r := range inboundListenRanges(other) {
+			if port >= r[0] && port <= r[1] {
+				return fmt.Errorf("awg: TPROXY port conflicts with inbound %d", other.Id)
+			}
+		}
+		keys := []string{"routeXrayPort"}
+		var otherRoute struct {
+			RouteThroughXray bool   `json:"routeThroughXray"`
+			XrayRoutingMode  string `json:"xrayRoutingMode"`
+		}
+		if other.Protocol == model.AWG && json.Unmarshal([]byte(other.Settings), &otherRoute) == nil && otherRoute.RouteThroughXray && otherRoute.XrayRoutingMode == "tproxy" {
+			keys = append(keys, "tproxyPort")
+		}
+		for _, key := range keys {
+			if parseSettingsIntKey(other.Settings, key) == port {
+				return fmt.Errorf("awg: TPROXY port reserved by inbound %d", other.Id)
+			}
+		}
+	}
+	if !unchanged {
+		addr := fmt.Sprintf("127.0.0.1:%d", port)
+		var lc net.ListenConfig
+		tcp, err := lc.Listen(context.Background(), "tcp4", addr)
+		if err != nil {
+			return fmt.Errorf("awg: TPROXY TCP port unavailable: %w", err)
+		}
+		defer tcp.Close()
+		udp, err := lc.ListenPacket(context.Background(), "udp4", addr)
+		if err != nil {
+			return fmt.Errorf("awg: TPROXY UDP port unavailable: %w", err)
+		}
+		_ = udp.Close()
+	}
+	return nil
+}
+
 func (s *InboundService) normalizeLucxSidecarsOnCreate(inbound *model.Inbound) error {
+	if err := s.checkAwgTproxyPort(inbound); err != nil {
+		return err
+	}
 	if err := s.normalizeNaiveXrayPort(inbound, ""); err != nil {
 		return err
 	}
@@ -1225,6 +1344,9 @@ func (s *InboundService) normalizeLucxSidecarsOnCreate(inbound *model.Inbound) e
 		if err := s.validateAnytlsCert(inbound); err != nil {
 			return err
 		}
+		if err := s.normalizeAnytlsXrayPort(inbound, ""); err != nil {
+			return err
+		}
 	}
 	if inbound.Protocol == model.Tproxy {
 		s.normalizeTproxySettings(inbound)
@@ -1255,6 +1377,9 @@ func (s *InboundService) normalizeLucxSidecarsOnCreate(inbound *model.Inbound) e
 }
 
 func (s *InboundService) normalizeLucxSidecarsOnUpdate(inbound, oldInbound *model.Inbound) error {
+	if err := s.checkAwgTproxyPort(inbound); err != nil {
+		return err
+	}
 	if inbound.Protocol == model.Qwdtt {
 		if err := s.checkVkTurnExclusive(model.Qwdtt, inbound.Id, inbound.NodeID); err != nil {
 			return err
@@ -1306,6 +1431,9 @@ func (s *InboundService) normalizeLucxSidecarsOnUpdate(inbound, oldInbound *mode
 	if inbound.Protocol == model.Anytls {
 		s.normalizeAnytlsSettings(inbound)
 		if err := s.validateAnytlsCert(inbound); err != nil {
+			return err
+		}
+		if err := s.normalizeAnytlsXrayPort(inbound, oldInbound.Settings); err != nil {
 			return err
 		}
 	}
@@ -1365,6 +1493,8 @@ func (s *InboundService) migrateAwgSettingsOnUpdate(inbound, oldInbound *model.I
 	if inbound.Protocol != model.AWG {
 		return nil
 	}
+	// LUCX-HOOK: drop inert routing keys when routing is off (update path).
+	stripAwgRouteSettings(inbound)
 	if err := validateAwgSettingsForSave(inbound.Settings, inbound.Tag); err != nil {
 		return err
 	}

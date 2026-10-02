@@ -782,6 +782,9 @@
         "awgKeepaliveTimeoutHint": "AWG3 cấp thiết bị: khoảng thời gian keepalive tính bằng giây (cấp thiết bị, không phải per-peer). 0 = mặc định kernel (10 s). Phạm vi 0–65535.",
         "awgMaxHandshakeAttempts": "MaxHandshakeAttempts",
         "awgMaxHandshakeAttemptsHint": "AWG3 cấp thiết bị: số lần thử handshake tối đa trước khi peer bị vô hiệu hóa. 0 = mặc định kernel (18 = 90/REKEY_TIMEOUT). Phạm vi 0–65535.",
+        "awgRoutingMode": "Xray routing mode",
+        "awgRoutingModeHint": "Off: direct. TUN: legacy mode. TPROXY: kernel AWG, IPv4 TCP/UDP only; ICMP and IPv6 are blocked. Changing mode briefly interrupts connections. The port must be free for TCP and UDP.",
+        "awgTproxyPort": "Local TPROXY port",
         "awgRouteThroughXray": "Định tuyến qua Xray",
         "awgRouteThroughXrayHint": "Gửi các gói đã giải mã của giao diện kernel AWG vào router Xray qua inbound TUN được chèn, để egress tuân theo quy tắc định tuyến. Tương tự routeThroughXray của mtproto.",
         "awgRouteOutbound": "Outbound định tuyến",
@@ -847,6 +850,8 @@
         "anytlsPasswordHint": "Empty = auto-generate on save",
         "anytlsSni": "SNI / domain",
         "anytlsSniHint": "Must be covered by the panel TLS certificate (x-ui SSL). Empty cert paths use Settings → Panel SSL.",
+        "anytlsRouteThroughXray": "Route through Xray",
+        "anytlsRouteThroughXrayHint": "AnyTLS outbound TCP (uid lucx-mtproxy) is redirected into an Xray SOCKS bridge. On = Xray routing rules and outbounds apply. Off = direct egress (default).",
         "tproxyNote": "Telegram WEB proxy (tproxy-server). Needs hostname:443, panel TLS cert covering the hostname, camouflage site, and binaries on Settings → Cores (tproxy-server, MTProxy, Caddy/NaiveProxy). Clients: Telegram Desktop WEB proxy. Share: t.me/webproxy",
         "tproxyHostname": "Hostname",
         "tproxyHostnameHint": "Bare DNS name, no https:// or port. Must match the TLS certificate.",
@@ -972,7 +977,7 @@
         "csqttVkHashes": "VK call hashes",
         "csqttVkHashesHint": "Comma-separated live VK TURN hashes (up to 6)",
         "csqttRouteThroughXray": "Route through Xray",
-        "csqttRouteThroughXrayHint": "Send csqtt1 packets into an Xray TUN via policy routing so egress follows routing rules / outbound. On by default. Off = binary MASQUERADE to the host NIC.",
+        "csqttRouteThroughXrayHint": "Off by default (host NAT). On sends csqtt1 into an Xray TUN so egress follows routing rules.",
         "csqttRouteOutbound": "Outbound",
         "csqttRouteOutboundHint": "Optional. Force CSQTT traffic out through this outbound (or balancer). Leave empty to let your Xray routing rules decide.",
         "csqttRouteOutboundPlaceholder": "Use routing rules"
@@ -1014,7 +1019,10 @@
         "live": "Live",
         "address": "Address",
         "version": "Version",
-        "savedDisabled": "After import the old Docker/awg3 manager is stopped and the inbound is enabled. Stacks that share 10.8.1.0/24 need different subnets before more than one kernel iface is up."
+        "savedDisabled": "After import the old Docker/awg3 manager is stopped and the inbound is enabled. Stacks that share 10.8.1.0/24 need different subnets before more than one kernel iface is up.",
+        "delete": "Delete selected",
+        "deleteConfirm": "Stop and remove the selected installs from this host? Panel inbounds are not created or deleted.",
+        "deleted": "Removed {count}."
       },
       "protocolNames": {
         "awg": "AmneziaWG (kernel)",
@@ -1871,6 +1879,11 @@
       "subHappColorProfileDesc": "Chủ đề màu iOS tùy chỉnh dưới dạng chuỗi JSON, hoặc resetcolors để khôi phục màu mặc định.",
       "subHappPingType": "Phương thức đo độ trễ",
       "subHappPingTypeDesc": "Cách Happ đo độ trễ của nút: qua proxy (GET hoặc HEAD), TCP hoặc ICMP.",
+      "subHappLocalProxyAuth": "Xác thực proxy cục bộ",
+      "subHappLocalProxyAuthDesc": "Gửi socks-auth-mode / http-auth-mode cho Happ. Không có xác thực, bất kỳ ứng dụng nào trên thiết bị cũng có thể dùng proxy SOCKS5/HTTP cục bộ của Happ để vào đường hầm và biết địa chỉ máy chủ. \"Tự động\" khiến Happ tạo thông tin đăng nhập ngẫu nhiên; không cần Provider ID.",
+      "subHappLocalProxyAuthAuto": "Tự động (thông tin ngẫu nhiên)",
+      "subHappLocalProxyAuthDisable": "Tắt",
+      "subHappLocalProxyAuthUnset": "Không gửi (mặc định của ứng dụng)",
       "subHappAutoConnect": "Tự động kết nối khi khởi động",
       "subHappAutoConnectDesc": "Yêu cầu Happ tự động kết nối VPN khi ứng dụng khởi động.",
       "subHappAutoConnectType": "Mục tiêu tự động kết nối",
@@ -2708,7 +2721,9 @@
           "apply": "Apply selected",
           "revert": "Revert",
           "applied": "Mask applied",
-          "reverted": "Mask reverted"
+          "reverted": "Mask reverted",
+      "insideSite": "Inside the site",
+      "insideHint": "WS / HTTPUpgrade share the Cover hostname. A browser on / sees the site. Refresh the subscription after Apply."
     },
     "tunnels": {
       "title": "Tunnel tools",
@@ -3284,3 +3299,4 @@
   "disable": "Vô hiệu hóa",
   "qrTooLarge": "Mã QR quá lỗn để hiển thị — hãy dùng tải xuống hoặc sao chép"
 }
+

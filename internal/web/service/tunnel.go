@@ -565,9 +565,16 @@ func (s *TunnelService) reconcileCsqttInbound() {
 	}
 	if err := tunnel.GetManager().Ensure(inst); err != nil {
 		logger.Warning("tunnel: csqtt inbound reconcile failed:", err)
-	} else if inst.RouteThroughXray {
-		tunnel.GetManager().EnsureQwdttRouting(inst)
+		return
 	}
+	if !inst.Enabled {
+		return
+	}
+	if inst.RouteThroughXray {
+		tunnel.GetManager().EnsureQwdttRouting(inst)
+		return
+	}
+	tunnel.EnsureCsqttDirect()
 }
 
 // reconcileMieruInbounds Ensures every mieru inbound sidecar and stops
@@ -605,6 +612,7 @@ func (s *TunnelService) reconcileAnytlsInbounds() {
 		return
 	}
 	var want []tunnel.Instance
+	routedPort := 0
 	for _, ib := range inbounds {
 		if ib == nil || ib.Protocol != model.Anytls || ib.NodeID != nil {
 			continue
@@ -614,6 +622,17 @@ func (s *TunnelService) reconcileAnytlsInbounds() {
 			continue
 		}
 		want = append(want, inst)
+		if ib.Enable {
+			if cfg, cfgOK := tunnel.AnytlsConfigFromInbound(ib); cfgOK && cfg.RouteThroughXray && cfg.RouteXrayPort > 0 {
+				routedPort = cfg.RouteXrayPort
+			}
+		}
+	}
+	if routedPort > 0 {
+		// One uid REDIRECT rule (lucx-mtproxy user) serves every routed AnyTLS.
+		tunnel.EnsureAnytlsXraySocks(routedPort)
+	} else {
+		tunnel.ClearAnytlsXraySocks()
 	}
 	tunnel.GetManager().ReconcileAnytls(want)
 }
@@ -681,12 +700,9 @@ func (s *TunnelService) reconcileCoverInbounds() {
 		if ib == nil || ib.Protocol != model.Cover || ib.NodeID != nil {
 			continue
 		}
-		inst, ok := tunnel.CoverInstanceFromInbound(ib, inbounds, secret, panelCert, panelKey)
+		inst, ok := tunnel.StandaloneCoverInstance(ib, inbounds, secret, panelCert, panelKey)
 		if !ok {
 			continue
-		}
-		if tunnel.GatewayAbsorbed(ib, inbounds) {
-			inst.Enabled = false
 		}
 		want = append(want, inst)
 	}

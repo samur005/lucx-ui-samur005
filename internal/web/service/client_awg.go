@@ -171,12 +171,47 @@ func AwgIFieldExportNote(settings string) string {
 // validateAwgSettingsForSave refuses everything except an over-budget I-set,
 // which is stored and logged once: refusing it froze node reconcile instead.
 func validateAwgSettingsForSave(settings, tag string) error {
+	if err := awg.ValidateTproxySettings(settings); err != nil {
+		return err
+	}
 	err := validateAwgSettingsJSON(settings)
 	if !errors.Is(err, awg.ErrIFieldsTooLarge) {
 		return err
 	}
 	logger.Warningf("awg: inbound %s saved with an I-set no renderer will emit: %v", tag, err)
 	return nil
+}
+
+// stripAwgRouteSettings deletes the now-inert routing keys when
+// routeThroughXray is off, mirroring normalizeMtprotoXrayPort: without this a
+// toggled-off inbound keeps xrayRoutingMode/tproxyPort/outboundTag in its
+// settings and re-enabling routing resurrects the stale mode instead of the
+// TUN default.
+func stripAwgRouteSettings(inbound *model.Inbound) {
+	if inbound == nil || inbound.Protocol != model.AWG {
+		return
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(inbound.Settings), &parsed); err != nil || parsed == nil {
+		return
+	}
+	if routed, _ := parsed["routeThroughXray"].(bool); routed {
+		return
+	}
+	_, hadMode := parsed["xrayRoutingMode"]
+	_, hadPort := parsed["tproxyPort"]
+	_, hadTag := parsed["outboundTag"]
+	if !hadMode && !hadPort && !hadTag {
+		return
+	}
+	delete(parsed, "xrayRoutingMode")
+	delete(parsed, "tproxyPort")
+	delete(parsed, "outboundTag")
+	if bs, err := json.MarshalIndent(parsed, "", "  "); err == nil {
+		inbound.Settings = string(bs)
+	} else {
+		logger.Warning("awg: failed to marshal settings after disabling routing:", err)
+	}
 }
 
 func validateAwgSettingsJSON(settings string) error {
@@ -633,6 +668,12 @@ func clearBroadcastTunnelIP(c *model.Client, proto model.Protocol, tunnelInbound
 
 func isTunnelProtocol(proto model.Protocol) bool {
 	return proto == model.AWG || proto == model.WireGuard || proto == model.AmneziaWG
+}
+
+// portForwardProtocol is the tunnel inbounds whose client JSON and client
+// record both store forwardedPorts. WireGuard has no host DNAT layer.
+func portForwardProtocol(proto model.Protocol) bool {
+	return proto == model.AmneziaWG || proto == model.AWG
 }
 
 func clearForeignTunnelFields(c *model.Client, proto model.Protocol) {

@@ -782,6 +782,9 @@
         "awgKeepaliveTimeoutHint": "AWG3 على مستوى الجهاز: فاصل keepalive بالثواني (على مستوى الجهاز، لا لكل peer). 0 = افتراضي kernel (10 ث). المدى 0–65535.",
         "awgMaxHandshakeAttempts": "MaxHandshakeAttempts",
         "awgMaxHandshakeAttemptsHint": "AWG3 على مستوى الجهاز: أقصى عدد لمحاولات المصافحة قبل تعطيل الـ peer. 0 = افتراضي kernel (18 = 90/REKEY_TIMEOUT). المدى 0–65535.",
+        "awgRoutingMode": "Xray routing mode",
+        "awgRoutingModeHint": "Off: direct. TUN: legacy mode. TPROXY: kernel AWG, IPv4 TCP/UDP only; ICMP and IPv6 are blocked. Changing mode briefly interrupts connections. The port must be free for TCP and UDP.",
+        "awgTproxyPort": "Local TPROXY port",
         "awgRouteThroughXray": "التوجيه عبر Xray",
         "awgRouteThroughXrayHint": "أرسل الحزم المفكوكة لواجهة AWG إلى موجّه Xray عبر إنباوند TUN مُدخل، بحيث تخضع المخرجات لقواعد التوجيه. يعكس routeThroughXray في mtproto.",
         "awgRouteOutbound": "مخرج التوجيه",
@@ -847,6 +850,8 @@
         "anytlsPasswordHint": "Empty = auto-generate on save",
         "anytlsSni": "SNI / domain",
         "anytlsSniHint": "Must be covered by the panel TLS certificate (x-ui SSL). Empty cert paths use Settings → Panel SSL.",
+        "anytlsRouteThroughXray": "Route through Xray",
+        "anytlsRouteThroughXrayHint": "AnyTLS outbound TCP (uid lucx-mtproxy) is redirected into an Xray SOCKS bridge. On = Xray routing rules and outbounds apply. Off = direct egress (default).",
         "tproxyNote": "Telegram WEB proxy (tproxy-server). Needs hostname:443, panel TLS cert covering the hostname, camouflage site, and binaries on Settings → Cores (tproxy-server, MTProxy, Caddy/NaiveProxy). Clients: Telegram Desktop WEB proxy. Share: t.me/webproxy",
         "tproxyHostname": "Hostname",
         "tproxyHostnameHint": "Bare DNS name, no https:// or port. Must match the TLS certificate.",
@@ -972,7 +977,7 @@
         "csqttVkHashes": "VK call hashes",
         "csqttVkHashesHint": "Comma-separated live VK TURN hashes (up to 6)",
         "csqttRouteThroughXray": "Route through Xray",
-        "csqttRouteThroughXrayHint": "Send csqtt1 packets into an Xray TUN via policy routing so egress follows routing rules / outbound. On by default. Off = binary MASQUERADE to the host NIC.",
+        "csqttRouteThroughXrayHint": "Off by default (host NAT). On sends csqtt1 into an Xray TUN so egress follows routing rules.",
         "csqttRouteOutbound": "Outbound",
         "csqttRouteOutboundHint": "Optional. Force CSQTT traffic out through this outbound (or balancer). Leave empty to let your Xray routing rules decide.",
         "csqttRouteOutboundPlaceholder": "Use routing rules"
@@ -1014,7 +1019,10 @@
         "live": "Live",
         "address": "Address",
         "version": "Version",
-        "savedDisabled": "After import the old Docker/awg3 manager is stopped and the inbound is enabled. Stacks that share 10.8.1.0/24 need different subnets before more than one kernel iface is up."
+        "savedDisabled": "After import the old Docker/awg3 manager is stopped and the inbound is enabled. Stacks that share 10.8.1.0/24 need different subnets before more than one kernel iface is up.",
+        "delete": "Delete selected",
+        "deleteConfirm": "Stop and remove the selected installs from this host? Panel inbounds are not created or deleted.",
+        "deleted": "Removed {count}."
       },
       "protocolNames": {
         "awg": "AmneziaWG (kernel)",
@@ -1871,6 +1879,11 @@
       "subHappColorProfileDesc": "سمة ألوان مخصصة لـ iOS كسلسلة JSON، أو resetcolors لاستعادة الألوان الافتراضية.",
       "subHappPingType": "طريقة قياس زمن الاستجابة",
       "subHappPingTypeDesc": "كيفية قياس Happ لزمن استجابة العقد: عبر البروكسي (GET أو HEAD) أو TCP أو ICMP.",
+      "subHappLocalProxyAuth": "مصادقة الوكيل المحلي",
+      "subHappLocalProxyAuthDesc": "يرسل إلى Happ الترويسات socks-auth-mode / http-auth-mode. بدون مصادقة يمكن لأي تطبيق على الجهاز استخدام وكيل SOCKS5/HTTP المحلي في Happ للوصول إلى النفق ومعرفة عنوان الخادم. \"تلقائي\" يجعل Happ ينشئ بيانات اعتماد عشوائية؛ لا يلزم Provider ID.",
+      "subHappLocalProxyAuthAuto": "تلقائي (بيانات اعتماد عشوائية)",
+      "subHappLocalProxyAuthDisable": "معطل",
+      "subHappLocalProxyAuthUnset": "عدم الإرسال (الافتراضي في العميل)",
       "subHappAutoConnect": "الاتصال التلقائي عند التشغيل",
       "subHappAutoConnectDesc": "يتصل Happ تلقائيًا بـ VPN عند بدء تشغيل التطبيق.",
       "subHappAutoConnectType": "هدف الاتصال التلقائي",
@@ -2708,7 +2721,9 @@
           "apply": "Apply selected",
           "revert": "Revert",
           "applied": "Mask applied",
-          "reverted": "Mask reverted"
+          "reverted": "Mask reverted",
+      "insideSite": "Inside the site",
+      "insideHint": "WS / HTTPUpgrade share the Cover hostname. A browser on / sees the site. Refresh the subscription after Apply."
     },
     "tunnels": {
       "title": "Tunnel tools",
@@ -3284,3 +3299,4 @@
   "disable": "تعطيل",
   "qrTooLarge": "رمز QR كبير جدًا للعرض — استخدم التنزيل أو النسخ"
 }
+

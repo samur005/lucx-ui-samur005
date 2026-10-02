@@ -783,6 +783,9 @@
         "awgKeepaliveTimeoutHint": "AWG3 на уровне устройства: интервал keepalive в секундах (на уровне устройства, не на peer). 0 = значение kernel по умолчанию (10 с). Диапазон 0–65535.",
         "awgMaxHandshakeAttempts": "MaxHandshakeAttempts",
         "awgMaxHandshakeAttemptsHint": "AWG3 на уровне устройства: максимальное число попыток handshake до отключения peer. 0 = значение kernel по умолчанию (18 = 90/REKEY_TIMEOUT). Диапазон 0–65535.",
+        "awgRoutingMode": "Режим Xray",
+        "awgRoutingModeHint": "Выключено: direct. TUN: прежний режим. TPROXY: kernel AWG, только IPv4 TCP/UDP; ICMP и IPv6 блокируются. Смена режима кратко прерывает соединения. Порт должен быть свободен для TCP и UDP.",
+        "awgTproxyPort": "Локальный порт TPROXY",
         "awgRouteThroughXray": "Маршрутизировать через Xray",
         "awgRouteThroughXrayHint": "Направить расшифрованные пакеты AWG-интерфейса в маршрутизатор Xray через инжектируемый TUN-inbound, чтобы исходящий трафик подчинялся правилам маршрутизации. Как у mtproto routeThroughXray.",
         "awgRouteOutbound": "Исходящий outbound",
@@ -850,7 +853,7 @@
         "csqttVkHashes": "VK call hashes",
         "csqttVkHashesHint": "Хеши VK TURN через запятую (до 6)",
         "csqttRouteThroughXray": "Через Xray",
-        "csqttRouteThroughXrayHint": "Трафик с csqtt1 идёт в TUN Xray (policy routing) — routing rules и outbound. По умолчанию вкл. Выкл = прямой MASQUERADE бинарника.",
+        "csqttRouteThroughXrayHint": "По умолчанию выкл (прямой NAT). Вкл — пакеты с csqtt1 идут в TUN Xray, исходящий по routing rules.",
         "csqttRouteOutbound": "Outbound",
         "csqttRouteOutboundHint": "Необязательно. Принудительно направить трафик CSQTT через этот outbound (или balancer). Пусто = решают правила маршрутизации Xray.",
         "csqttRouteOutboundPlaceholder": "Использовать правила маршрутизации",
@@ -863,6 +866,8 @@
         "anytlsPasswordHint": "Пусто = сгенерируется при сохранении",
         "anytlsSni": "SNI / домен",
         "anytlsSniHint": "Должен быть в сертификате панели (x-ui SSL). Пустые пути cert/key = Settings → Panel SSL.",
+        "anytlsRouteThroughXray": "Через Xray",
+        "anytlsRouteThroughXrayHint": "Исходящий TCP AnyTLS (uid lucx-mtproxy) уходит в SOCKS-мост Xray по правилам маршрутизации. Выкл = напрямую (по умолчанию).",
         "tproxyNote": "Telegram WEB proxy (tproxy-server). Нужны hostname:443, TLS панели на этот hostname, сайт-камуфляж и бинарники в Настройки → Ядра (tproxy-server, MTProxy, Caddy/NaiveProxy). Клиенты: Telegram Desktop WEB proxy. Ссылка: t.me/webproxy",
         "tproxyHostname": "Hostname",
         "tproxyHostnameHint": "Голое DNS-имя, без https:// и порта. Должно совпадать с сертификатом.",
@@ -1014,7 +1019,10 @@
         "live": "Live",
         "address": "Адрес",
         "version": "Версия",
-        "savedDisabled": "После импорта старый Docker/awg3 останавливается, инбаунд включается. Если стеки делят 10.8.1.0/24 — смените subnet, прежде чем поднимать больше одного интерфейса на ядре."
+        "savedDisabled": "После импорта старый Docker/awg3 останавливается, инбаунд включается. Если стеки делят 10.8.1.0/24 — смените subnet, прежде чем поднимать больше одного интерфейса на ядре.",
+        "delete": "Удалить выбранные",
+        "deleteConfirm": "Остановить и удалить выбранные установки с этого хоста? Инбаунды панели не создаются и не удаляются.",
+        "deleted": "Удалено: {count}."
       },
       "protocolNames": {
         "awg": "AmneziaWG (kernel)",
@@ -1871,6 +1879,11 @@
       "subHappColorProfileDesc": "Своя цветовая тема для iOS в виде JSON-строки или resetcolors для сброса к стандартным цветам.",
       "subHappPingType": "Метод проверки пинга",
       "subHappPingTypeDesc": "Способ измерения задержки узлов в Happ: через прокси (GET или HEAD), TCP или ICMP.",
+      "subHappLocalProxyAuth": "Авторизация локального прокси",
+      "subHappLocalProxyAuthDesc": "Отправляет Happ заголовки socks-auth-mode / http-auth-mode. Без авторизации любое приложение на устройстве может через локальный SOCKS5/HTTP-прокси Happ попасть в туннель и узнать адрес сервера. «Авто» — Happ сам создаёт случайные учётные данные; Provider ID не нужен.",
+      "subHappLocalProxyAuthAuto": "Авто (случайные учётные данные)",
+      "subHappLocalProxyAuthDisable": "Отключена",
+      "subHappLocalProxyAuthUnset": "Не отправлять (по умолчанию клиента)",
       "subHappAutoConnect": "Автоподключение при запуске",
       "subHappAutoConnectDesc": "Автоматически подключаться к серверу при запуске приложения.",
       "subHappAutoConnectType": "Критерий автоподключения",
@@ -2674,7 +2687,7 @@
     },
     "masking": {
           "title": "Маскировка 443 по SNI",
-          "help": "Публичный IPv4:443 режет по SNI. SNI в таблице — это SNI inbound (хост Cover / serverNames REALITY / TLS). Один SNI на inbound. Apply пишет его и собирает mux. Пока не Apply — выкл.",
+          "help": "Публичный IPv4:443 режет по SNI. serverNames и dest REALITY не меняются. WS / HTTPUpgrade можно посадить внутрь Cover на путь. UDP остаётся на своём порту. Пока не Apply — выкл.",
           "publicHost": "Публичный хост",
           "noGateway": "Нет inbound gateway",
           "createFirst": "Создастся здесь (выкл., порт 443). Потом отметь, что прятать за 443.",
@@ -2708,7 +2721,9 @@
           "apply": "Применить",
           "revert": "Вернуть",
           "applied": "Маска включена",
-          "reverted": "Маска снята"
+          "reverted": "Маска снята",
+      "insideSite": "Внутрь сайта",
+      "insideHint": "WS / HTTPUpgrade делят hostname Cover. Браузер на / видит сайт. После Apply обновите подписку."
     },
     "tunnels": {
       "title": "Инструменты туннелей",
@@ -3284,3 +3299,4 @@
   "disable": "Отключить",
   "qrTooLarge": "QR слишком большой — используйте скачивание или копирование"
 }
+
