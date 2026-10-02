@@ -24,6 +24,7 @@ import (
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
+	"github.com/mhsanaei/3x-ui/v3/internal/lucx/nodetype"
 	"github.com/mhsanaei/3x-ui/v3/internal/lucx/tunnel"
 	"github.com/mhsanaei/3x-ui/v3/internal/tuic"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/common"
@@ -3381,7 +3382,7 @@ func (s *SubService) genQwdttLink(inbound *model.Inbound, email string) string {
 	if !ok || !inbound.Enable {
 		return ""
 	}
-	if email != "" && strings.TrimSpace(cfg.Password) != "" {
+	if email != "" && strings.TrimSpace(cfg.Password) != "" && s.nodeRegistersQwdttPasswords(inbound) {
 		if c, found := s.clientForLink(inbound, email); found && c.Enable {
 			if pw := tunnel.QwdttClientPassword(cfg.Password, tunnel.QwdttClientKey(c.ID, c.Email)); pw != "" {
 				cfg.Password = pw
@@ -3395,6 +3396,22 @@ func (s *SubService) genQwdttLink(inbound *model.Inbound, email string) string {
 		}
 	}
 	return cfg.ClientURI()
+}
+
+// nodeRegistersQwdttPasswords reports whether the sidecar behind the inbound
+// registers per-client passwords: always for a local inbound (this panel does
+// it), for a node-managed one only when that node advertises
+// nodetype.FeatureQwdttPersonal. An older node would reject a personal password
+// it never registered.
+func (s *SubService) nodeRegistersQwdttPasswords(inbound *model.Inbound) bool {
+	if inbound == nil || inbound.NodeID == nil {
+		return true
+	}
+	n, ok := s.nodesByID[*inbound.NodeID]
+	if !ok || n == nil {
+		return false
+	}
+	return nodetype.FromJSON(n.Features).HasFeature(nodetype.FeatureQwdttPersonal)
 }
 
 func (s *SubService) genCsqttLink(inbound *model.Inbound) string {

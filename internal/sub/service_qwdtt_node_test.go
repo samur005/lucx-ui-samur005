@@ -102,3 +102,40 @@ func TestGenQwdttLink_PersonalPassword(t *testing.T) {
 		t.Fatalf("links differ beyond the password:\n%s\n%s", a, b)
 	}
 }
+
+// A node-managed inbound gets personal passwords only when its node advertises
+// the capability; an older node (which never registers them) keeps the shared
+// password so its profile keeps working.
+func TestGenQwdttLink_PersonalPasswordNeedsCapableNode(t *testing.T) {
+	nodeID := 5
+	ib := &model.Inbound{
+		Id: 44, Enable: true, Port: 56000, Protocol: model.Qwdtt, NodeID: &nodeID,
+		Settings: `{"listenAddr":"0.0.0.0:56000","password":"sharedSharedShar","subHost":"13.143.132.172:56000","vkHashes":"h1","workers":16,"clientPort":9000,"remark":"FI"}`,
+	}
+	client := model.Client{ID: "uuid-a", Email: "a@x", Enable: true}
+	personal := tunnel.QwdttClientPassword("sharedSharedShar", "uuid-a")
+	pass := func(features string, noNode bool) string {
+		s := &SubService{nodesByID: map[int]*model.Node{5: {Id: 5, Address: "13.143.132.172", Features: features}}}
+		if noNode {
+			s.nodesByID = nil
+		}
+		s.primeLinkClients(ib.Id, []model.Client{client}, true)
+		p, ok := qwdttProfileFromURI(s.GetLink(ib, "a@x"))
+		if !ok {
+			t.Fatal("no qwdtt link")
+		}
+		return p.Password
+	}
+	if got := pass(`{"nodeType":"lucx","features":["qwdtt","qwdtt-personal"]}`, false); got != personal {
+		t.Fatalf("capable node: got %q want personal", got)
+	}
+	for name, got := range map[string]string{
+		"old node":     pass(`{"nodeType":"lucx","features":["qwdtt"]}`, false),
+		"no features":  pass(``, false),
+		"unknown node": pass(``, true),
+	} {
+		if got != "sharedSharedShar" {
+			t.Fatalf("%s must keep the shared password, got %q", name, got)
+		}
+	}
+}

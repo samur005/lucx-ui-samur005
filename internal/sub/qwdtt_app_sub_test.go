@@ -141,7 +141,8 @@ func TestQwdttAppTrafficMb(t *testing.T) {
 func seedQwdttAppSub(t *testing.T, subId string) {
 	t.Helper()
 	db := database.GetDB()
-	node := &model.Node{Name: "fi", Scheme: "https", Address: "13.143.132.172", Port: 7788, BasePath: "/", ApiToken: "tok", Enable: true}
+	node := &model.Node{Name: "fi", Scheme: "https", Address: "13.143.132.172", Port: 7788, BasePath: "/", ApiToken: "tok", Enable: true,
+		Features: `{"nodeType":"lucx","features":["qwdtt","qwdtt-personal"]}`}
 	if err := db.Create(node).Error; err != nil {
 		t.Fatalf("seed node: %v", err)
 	}

@@ -22,6 +22,7 @@ func LocalHello() HelloObj {
 	hs := awg.CollectHostStatus()
 	features := make([]string, len(DefaultLucXFeatures))
 	copy(features, DefaultLucXFeatures)
+	features = append(features, FeatureQwdttPersonal)
 	return HelloObj{
 		Version:    config.GetPanelVersion(),
 		Features:   features,
