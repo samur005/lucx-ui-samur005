@@ -46,7 +46,7 @@ type CsqttConfig struct {
 }
 
 func DefaultCsqttConfig() CsqttConfig {
-	return CsqttConfig{ListenAddr: csqttDefaultListen, RouteThroughXray: true}
+	return CsqttConfig{ListenAddr: csqttDefaultListen}
 }
 
 func (c CsqttConfig) Merge() CsqttConfig {

@@ -1,10 +1,127 @@
 # LucX-UI — Прогресс
 
+## lucx.277 — CSQTT: Xray routing off by default, bridge matches AWG (2026-10-01)
+
+VladufQa: CSQTT connects, traffic does not. lucx.238 turned `routeThroughXray` on and stripped MASQUERADE, but only added `iif csqtt1 lookup 1910`. Missing the AWG half: FORWARD accept, `rp_filter=2` on `csqtt1`, MSS clamp. The binary does not install NAT (`deploy.sh` does). UFW FORWARD DROP then eats `csqtt1 → tunN` while UDP connect stays up.
+
+- Default `routeThroughXray` is off. Missing key is off (no longer forced on). Off installs MASQUERADE + FORWARD and deletes the policy rule.
+- On installs the full bridge. FORWARD rules are `-I 1` so a later UFW reject cannot drop the new flow.
+- Pattern 1aq in `.agents/07-debug-tunnels.md`.
+
+**lucxVersion:** lucx.277
+
+Tests: `go test ./internal/lucx/tunnel/ -count=1 -run Csqtt`.
+
+---
+
+## lucx.276 — TrustTunnel sub: spec TLV links only (2026-10-01)
+
+VladufQa: subscription has two links for TrustTunnel, the second one dead; HTTP/3 → four. ShareLines fanned every transport out as TLV + Throne authority URI; the audit of client parsers (official app, Exclave, husi, Throne desktop) shows TLV-only support on every end — the URI threw inside the sing-based Android parsers and doubled the profile list in Throne.
+
+- `ShareLines` (internal/lucx/tunnel/trusttunnel.go) emits TLV only: http2 → 1 link, quic → 2 (https + quic). `ClientURI` (Throne dialect) stays for the SidecarOutbound paste path but no longer goes into the subscription.
+- Pattern 1ap in `.agents/07-debug-tunnels.md`.
+
+**lucxVersion:** lucx.276
+
+Tests: `go test ./internal/lucx/... -count=1` green; `go test ./internal/sub/ -run TestGetSubs_TrustTunnel` compiles (linux cross-build; exec-gated on Windows CGO as always).
+
+---
+
+## lucx.275 — Masking: steal a self-referencing REALITY dest (2026-09-30)
+
+Tester report: enabling masking exploded TCP sockets (35k open, zero clients attached, "как будто что-то зацикливается"). Root cause is upstream physics, not a Go leak: xtls/reality's `Server()` dials `realitySettings.dest` on **every** accepted TLS conn — a failed handshake is relayed to dest verbatim (that is the steal mechanism). When dest routes back into the same server (operator's own domain:443 used as publicHost, the server IP, or any loopback), each scanner probe recurses Caddy L4 → Xray → dest → Caddy again; `matching_timeout 15s` bounds one ClientHello wait, not the chain. Public :443 eats thousands of junk SNI probes daily, so sockets multiply with no clients.
+
+Fix: `RealitySelfDest` (gateway_apply.go) flags a dest that matches publicHost / bindIP / server's own LocalIPv4 / loopback / localhost. `BuildPreview` sets `StealDest` on such rows (second pass, once the cover row's port is known) — healthy external dests (microsoft.com) are never touched, honoring the lucx.269 "stop rewriting REALITY" decision. `GatewayApply` forces the steal for marked rows and honors the UI checkbox (`req.Steal`, previously dead plumbing) for healthy rows when a selected cover exists: dest+target become `127.0.0.1:<coverPort>`, which the unified gateway serves via the cover site block (`bind l4chan/cover-N 127.0.0.1`) that terminates TLS in-process — a terminal hop, no recursion. Revert restores the old stream from the snapshot as usual.
+
+PR #125 (rudenko-ks): the panel form saves REALITY's destination as `target`, `dest` is the legacy alias — `RealityDest` now reads `target` first, falling back to `dest`, so the auto-steal also sees panel-saved inbounds (their own server hit ~14k conns and OOM with the panel form on 274). `TestRealitySelfDest` runs every case through both field names.
+
+Also in this release: frontend `brace-expansion` → 5.0.12 via npm overrides (CI `npm audit` high, GHSA-q2hr-2g5m-vwhr — quadratic/recursive brace expansion DoS).
+
+**lucxVersion:** lucx.275
+
+Tests: `go test ./internal/lucx/tunnel/ -count=1` (new: `TestBuildPreview_StealMarksSelfDest`, `TestRealitySelfDest` incl. `[::1]` bracket case + target/dest alias); full CI green on main (all 8 jobs); `go vet` clean (Windows CGO gate on internal/database as always).
+
+---
+
+## lucx.274 — AWG: strip stale routing keys when routeThroughXray goes off (2026-09-29)
+
+Toggling routeThroughXray off left `xrayRoutingMode`/`tproxyPort`/`outboundTag` in the stored settings (tester report: "при выключенной маршрутизации поле режим Xray не обнуляется"), so re-enabling resurrected the stale mode instead of the TUN default. New `stripAwgRouteSettings` (client_awg.go) deletes those keys when routing is off, mirroring `normalizeMtprotoXrayPort`; wired into both save paths (`AddInbound` via `migrateAwgSettingsOnUpdate` chain, update path in `migrateAwgSettingsOnUpdate`). TPROXY kernel side (mangle/Filter rules, policy rule, local table) is torn down by `cleanupTproxyConfig`/PostDown when the conf is re-rendered without the tproxy block, and `ensureXrayRouting` becomes a no-op once routed=false, so traffic falls back to kernel NAT (MASQUERADE by subnet) correctly.
+
+**lucxVersion:** lucx.274
+
+Tests: `go test ./internal/web/service/ -run "TestStripAwgRouteSettings|TestAddInbound_ToggledOffAwgDropsRouteKeys|TestAwgRoutesThroughXray" -count=1` green (zig cc as CGO cross-gcc on Windows); `go test ./internal/awg/ ./internal/lucx/... -count=1` green.
+
+---
+
+## lucx.273 — AnyTLS: routeThroughXray via uid REDIRECT (2026-09-29)
+
+anytls-go has no SOCKS dialer, so the sidecar's own outbound TCP is redirected by uid (`lucx-mtproxy` user, shared with tproxy's REDIRECT) into the 23990 listener → hidden Xray SOCKS inbound tagged with the inbound's own tag. `routeThroughXray`/`routeXrayPort`/`outboundTag` on the AnyTLS form (schema, defaults, i18n all locales). Empty outboundTag = "let Xray routing decide" (mtproto pattern). `redirectOwners` registry in `tproxy_firewall_linux.go` stops tproxy's reconcile from clearing the shared uid rule while a routed AnyTLS still needs it (and vice versa). Off = direct egress, unchanged.
+
+**lucxVersion:** lucx.273
+
+Tests: `go test ./internal/lucx/tunnel/ -count=1` (parse routeThroughXray); `internal/web/service` tests need Linux CGO (Windows gate); frontend typecheck + lint clean.
+
+---
+
+## lucx.272 — Masking: auto-install UFW on apply (2026-09-29)
+
+Tickbox "Close extra ports (UFW)" on Debian (minbase, no ufw) failed with "ufw not installed". `ApplyUFW` now installs missing ufw itself: `apt-get update` + `apt-get install -y ufw` (DEBIAN_FRONTEND=noninteractive, 5 min cap) — same behavior as the `x-ui` firewall menu. No apt-get (RHEL etc.) still returns a clear error.
+
+**lucxVersion:** lucx.272
+
+Tests: `go test ./internal/lucx/tunnel/ -count=1` (new: install-on-apply, error without apt); `go vet` clean.
+
+---
+
+## lucx.271 — Opt-in kernel AWG TPROXY (2026-09-27)
+
+`routeThroughXray=false` stays direct. Missing or `tun` mode stays the Xray TUN bridge. `xrayRoutingMode=tproxy` plus a local `tproxyPort` injects a loopback dokodemo-door and interface-scoped IPv4 TCP/UDP TPROXY rules. No client key or address rewrite. Remote nodes and userspace fallback are refused. Issue #118.
+
+**lucxVersion:** lucx.271
+
+Tests: `go test ./internal/awg/ -count=1 -run Tproxy`, frontend `awg-tproxy`. Linux netns test is opt-in (`LUCX_TPROXY_NETNS_TEST=1`). Service tests need Linux CGO.
+
+---
+
+## lucx.270 — AWG port-forward save; Telegram proxy survives settings save (2026-09-27)
+
+Client edit of kernel AWG dropped `forwardedPorts`: the settings write and conflict check only ran for AmneziaWG, so the clients page reopened with an empty field and iptables never saw the spec. Both protocols now share that path, and the editor writes `wg_forwarded_ports` itself when the field is non-empty. Empty still means omit.
+
+Settings save dropped `tgBotProxy` because `AllSetting` did not declare it (`cloneProps` only copies existing fields). The class and Telegram tab now round-trip it. An omitted proxy keeps the stored value; an explicit empty string clears it. The bot restarts when its proxy or panel egress changes.
+
+**lucxVersion:** lucx.270
+
+Tests: frontend `telegram-proxy`, `client-forwarded-ports`. Go controller/service tests need Linux CGO.
+
+---
+
+## lucx.269 — Masking: stop rewriting REALITY; hide WS inside Cover (2026-09-27)
+
+Apply no longer writes REALITY `dest` or `serverNames`. Reconcile does not either. Passthrough leaves public :443. Revert writes `listen` with a map so an empty listen clears `127.0.0.1`. Other subscription hosts for that inbound are disabled until Revert. WS / HTTPUpgrade (VLESS, VMess, Trojan, Shadowsocks) can sit inside a selected Cover on a path; the inbound TLS is dropped because Cover terminates it. Naive still uses the existing hide-behind-site checkbox. UDP (AWG included) stays public with a note, no checkbox.
+
+**lucxVersion:** lucx.269
+
+Tests: `go test ./internal/lucx/tunnel/ -count=1` (preview, plain path, cover route, reality SNI, empty listen). CI golangci: goimports group for gorm, drop unused `coverSelected`.
+
+---
+
+## unreleased — Delete discovered AWG / tproxy without importing (2026-09-25)
+
+Import modal gained **Delete selected**. It stops the foreign install and drops it from discover. It does not create or delete panel inbounds. AWG `.conf` files move to `x-ui-backup`. tproxy stops `tproxy-server` / `mtprotoproxy`, removes `/etc/tproxy-server`, and drops an nginx vhost that only reverse-proxies that listen port.
+
+No `lucxVersion` bump and no tag — not a release.
+
+Tests: `go test ./internal/awg/ ./internal/lucx/tunnel/`, frontend `awg-import-banner-warning` + i18n dead keys.
+
+---
+
 ## lucx.268 — Masking: hide Naive behind the selected site (2026-09-25)
 
 Naive stays out of the 443 table. On the row below, tick «Спрятать за сайт» and Apply: the share link becomes `naive+https://…@site:443`. Cover uses behindCover; WEB proxy injects forward_proxy. HTTP/3 is turned off so NekoBox does not QUIC to a private port.
 
 **lucxVersion:** lucx.268
+
+CI: `createDefaultAnytlsInboundSettings` lacked `clients` after the schema started requiring it. Default is `[]`.
 
 ---
 

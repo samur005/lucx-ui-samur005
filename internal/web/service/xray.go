@@ -513,6 +513,14 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 		naiveInboundSeen = true
 		injectNaiveInboundEgress(xrayConfig, inbound)
 	}
+	// AnyTLS inbound rows (lucx.273): uid REDIRECT bridge, tag = inbound.Tag.
+	for i := range inbounds {
+		inbound := inbounds[i]
+		if inbound.Protocol != model.Anytls || !inbound.Enable || inbound.NodeID != nil {
+			continue
+		}
+		injectAnytlsEgress(xrayConfig, inbound)
+	}
 	if !naiveInboundSeen {
 		if naiveCfg, err := (&TunnelService{}).LoadNaiveConfig(); err == nil {
 			injectTunnelEgress(xrayConfig, naiveCfg)
@@ -853,6 +861,26 @@ func injectTproxyEgress(cfg *xray.Config, inbound *model.Inbound) {
 	})
 }
 
+// LUCX-HOOK: injectAnytlsEgress wires one routed AnyTLS inbound into Xray as a
+// loopback SOCKS bridge tagged with the inbound's own tag (tproxy pattern).
+// anytls-go has no SOCKS dialer, so the sidecar's own outbound TCP is redirected
+// by uid (lucx-mtproxy, same engine user) into the hidden Xray inbound below;
+// the bridge listen itself is the tproxy uid REDIRECT listener on 23990.
+func injectAnytlsEgress(cfg *xray.Config, inbound *model.Inbound) {
+	var parsed struct {
+		RouteThroughXray bool   `json:"routeThroughXray"`
+		RouteXrayPort    int    `json:"routeXrayPort"`
+		OutboundTag      string `json:"outboundTag"`
+	}
+	if err := json.Unmarshal([]byte(inbound.Settings), &parsed); err != nil {
+		return
+	}
+	if !parsed.RouteThroughXray || parsed.RouteXrayPort <= 0 || inbound.Tag == "" {
+		return
+	}
+	injectSocksEgress(cfg, inbound.Tag, parsed.RouteXrayPort, parsed.OutboundTag, "anytls egress", true)
+}
+
 func injectTunnelEgress(cfg *xray.Config, naive tunnel.NaiveConfig) {
 	if !naive.Enabled || !naive.RouteThroughXray || naive.RouteXrayPort <= 0 {
 		return
@@ -1033,6 +1061,8 @@ func awgTunGateway(id int) string {
 // kernel module, not TCP from a userspace daemon.
 func injectAwgEgress(cfg *xray.Config, inbound *model.Inbound) {
 	var parsed struct {
+		XrayRoutingMode  string `json:"xrayRoutingMode"`
+		TproxyPort       int    `json:"tproxyPort"`
 		RouteThroughXray bool   `json:"routeThroughXray"`
 		OutboundTag      string `json:"outboundTag"`
 		MTU              int    `json:"mtu"`
@@ -1041,6 +1071,10 @@ func injectAwgEgress(cfg *xray.Config, inbound *model.Inbound) {
 		return
 	}
 	if !parsed.RouteThroughXray || inbound.Tag == "" {
+		return
+	}
+	if parsed.XrayRoutingMode == "tproxy" && (parsed.TproxyPort < 1024 || parsed.TproxyPort > 65535) {
+		logger.Warning("awg egress: invalid TPROXY port, skipping bridge")
 		return
 	}
 	tag := inbound.Tag
@@ -1088,6 +1122,11 @@ func injectAwgEgress(cfg *xray.Config, inbound *model.Inbound) {
 				logger.Warning("awg egress: failed to rebuild routing section, skipping rule:", err)
 			}
 		}
+	}
+
+	if parsed.XrayRoutingMode == "tproxy" {
+		cfg.InboundConfigs = append(cfg.InboundConfigs, awg.TproxyInbound(tag, parsed.TproxyPort))
+		return
 	}
 
 	mtu := parsed.MTU

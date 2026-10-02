@@ -157,6 +157,104 @@ func TestBuildPreview_NaiveStaysPublic(t *testing.T) {
 	}
 }
 
+// TestBuildPreview_StealMarksSelfDest: a REALITY dest resolving back into
+// this server (public host, bind IP, own IPv4, loopback) is marked for the
+// steal — Xray dials dest on every failed handshake and a self-referencing
+// dest recurses Caddy↔Xray (tester lucx.275: 35k sockets, zero clients).
+func TestBuildPreview_StealMarksSelfDest(t *testing.T) {
+	stream := func(dest string) string {
+		return `{"network":"tcp","security":"reality","realitySettings":{"serverNames":["www.microsoft.com"],"dest":"` + dest + `"}}`
+	}
+	cover := &model.Inbound{Id: 2, Protocol: model.Cover, Port: 443, Enable: true, Settings: `{"hostname":"cov.example.com"}`}
+	rows := BuildPreview(443, "node.example.com", []*model.Inbound{
+		{Id: 1, Protocol: model.VLESS, Port: 443, Enable: true, StreamSettings: stream("node.example.com:443")},
+		cover,
+	}, "203.0.113.5")
+	byID := map[int]PreviewRow{}
+	for _, r := range rows {
+		byID[r.InboundID] = r
+	}
+	if byID[1].StealDest == "" {
+		t.Fatalf("public-host dest must be steal-marked: %+v", byID[1])
+	}
+	if byID[1].StealDest != "127.0.0.1:"+itoa(byID[2].NewPort) {
+		t.Fatalf("steal dest must be the cover loopback: %+v", byID[1])
+	}
+
+	// Healthy external dest is never touched.
+	rows = BuildPreview(443, "node.example.com", []*model.Inbound{
+		{Id: 1, Protocol: model.VLESS, Port: 443, Enable: true, StreamSettings: stream("www.microsoft.com:443")},
+		cover,
+	}, "203.0.113.5")
+	if rows[0].StealDest != "" {
+		t.Fatalf("healthy dest must stay: %+v", rows[0])
+	}
+
+	// Bind IP dest.
+	rows = BuildPreview(443, "node.example.com", []*model.Inbound{
+		{Id: 1, Protocol: model.VLESS, Port: 443, Enable: true, StreamSettings: stream("203.0.113.5:443")},
+		cover,
+	}, "203.0.113.5")
+	if rows[0].StealDest == "" {
+		t.Fatalf("bind-IP dest must be steal-marked: %+v", rows[0])
+	}
+
+	// Loopback dest.
+	rows = BuildPreview(443, "node.example.com", []*model.Inbound{
+		{Id: 1, Protocol: model.VLESS, Port: 443, Enable: true, StreamSettings: stream("127.0.0.1:443")},
+		cover,
+	}, "203.0.113.5")
+	if rows[0].StealDest == "" {
+		t.Fatalf("loopback dest must be steal-marked: %+v", rows[0])
+	}
+
+	// No cover → nothing to steal to.
+	rows = BuildPreview(443, "node.example.com", []*model.Inbound{
+		{Id: 1, Protocol: model.VLESS, Port: 443, Enable: true, StreamSettings: stream("127.0.0.1:443")},
+	}, "203.0.113.5")
+	if rows[0].StealDest != "" {
+		t.Fatalf("no cover, no steal: %+v", rows[0])
+	}
+}
+
+func TestRealitySelfDest(t *testing.T) {
+	cases := []struct {
+		dest       string
+		publicHost string
+		bindIP     string
+		want       bool
+	}{
+		{"node.example.com:443", "node.example.com", "203.0.113.5", true},
+		{"203.0.113.5:443", "node.example.com", "203.0.113.5", true},
+		{"127.0.0.1:443", "", "", true},
+		{"[::1]:443", "", "", true},
+		{"localhost:443", "", "", true},
+		{"www.microsoft.com:443", "node.example.com", "203.0.113.5", false},
+		{"some-other.site:443", "node.example.com", "203.0.113.5", false},
+		{"", "", "", false},
+	}
+	// The panel's form saves "target" (Xray's current name); "dest" is the legacy alias.
+	for _, field := range []string{"dest", "target"} {
+		for _, tc := range cases {
+			stream := `{"network":"tcp","security":"reality","realitySettings":{"` + field + `":"` + tc.dest + `"}}`
+			if got := RealitySelfDest(stream, tc.publicHost, tc.bindIP); got != tc.want {
+				t.Errorf("%s=%q host=%q bind=%q: got %v want %v", field, tc.dest, tc.publicHost, tc.bindIP, got, tc.want)
+			}
+		}
+	}
+	Local := LocalIPv4()
+	if Local != "" {
+		stream := `{"network":"tcp","security":"reality","realitySettings":{"dest":"` + Local + `:443"}}`
+		if !RealitySelfDest(stream, "", "") {
+			t.Fatalf("server's own IPv4 %s must be steal-marked", Local)
+		}
+	}
+}
+
+func itoa(i int) string {
+	return strconv.Itoa(i)
+}
+
 func TestRenderGatewayCaddyfile_NoProxy(t *testing.T) {
 	got := RenderGatewayCaddyfile(443, []GatewayRoute{
 		{SNI: "raw.example.com", Dest: "127.0.0.1:1443", NoProxy: true},
@@ -218,8 +316,8 @@ func TestBuildPreview_MovesPublic443(t *testing.T) {
 	if r.HostAddress != "node.example.com" || r.HostPort != 443 {
 		t.Fatalf("hosts: %+v", r)
 	}
-	if r.StealDest != "127.0.0.1:"+strconv.Itoa(byID[2].NewPort) {
-		t.Fatalf("steal dest %q cover port %d", r.StealDest, byID[2].NewPort)
+	if r.StealDest != "" || !r.SNILocked {
+		t.Fatalf("reality must keep its dest and SNI, got %+v", r)
 	}
 	c := byID[2]
 	if c.Class != ClassCaddy || c.NewPort == 443 {
@@ -371,8 +469,8 @@ func TestBuildPreview_BindIPKeepsSolo443(t *testing.T) {
 			StreamSettings: `{"network":"tcp","security":"reality","realitySettings":{"serverNames":["www.microsoft.com"]}}`,
 		},
 	}, "203.0.113.5")
-	if len(rows) != 1 || rows[0].NewPort != 443 || rows[0].NewListen != "127.0.0.1" {
-		t.Fatalf("%+v", rows)
+	if len(rows) != 1 || rows[0].NewPort == 443 || rows[0].NewListen != "127.0.0.1" {
+		t.Fatalf("passthrough must leave public :443: %+v", rows)
 	}
 }
 
@@ -387,11 +485,8 @@ func TestSetInboundSNI(t *testing.T) {
 		StreamSettings: `{"network":"tcp","security":"reality","realitySettings":{"serverNames":["www.microsoft.com"],"dest":"www.microsoft.com:443"}}`,
 	}
 	SetInboundSNI(vless, "vpn.example.com")
-	if !strings.Contains(vless.StreamSettings, `"serverNames":["vpn.example.com"]`) {
-		t.Fatalf("serverNames: %s", vless.StreamSettings)
-	}
-	if !strings.Contains(vless.StreamSettings, `"dest":"www.microsoft.com:443"`) {
-		t.Fatalf("dest: %s", vless.StreamSettings)
+	if strings.Contains(vless.StreamSettings, "vpn.example.com") || !strings.Contains(vless.StreamSettings, "www.microsoft.com") {
+		t.Fatalf("reality SNI must stay: %s", vless.StreamSettings)
 	}
 }
 
@@ -558,6 +653,65 @@ func TestGatewayInstance_UnifiedSites(t *testing.T) {
 	}
 }
 
+func TestGatewayInstance_UnifiedCoverServesStealDest(t *testing.T) {
+	stubGatewayChan(t, true)
+	dir := t.TempDir()
+	cert, key := writeTestCert(t, dir, time.Now().Add(24*time.Hour), "cov.example.com")
+	cover := &model.Inbound{
+		Id: 2, Protocol: model.Cover, Port: 8443, Enable: true, Listen: "127.0.0.1",
+		Settings: `{"hostname":"cov.example.com","siteSource":"upstream","siteUpstream":"http://127.0.0.1:8080"}`,
+	}
+	gw := &model.Inbound{
+		Id: 9, Protocol: model.Gateway, Port: 443, Enable: true,
+		Settings: `{"enabled":true,"unified":true,"routes":[{"sni":"cov.example.com","dest":"127.0.0.1:8443","chan":"cover-2"}],"snapshot":[{"inboundId":2}]}`,
+	}
+	inst, ok := GatewayInstanceFromInbound(gw, []*model.Inbound{cover}, nil, cert, key)
+	if !ok || !inst.Enabled {
+		t.Fatalf("ok=%v enabled=%v", ok, inst.Enabled)
+	}
+	steal := gatewayLoopbackDest(cover.Port)
+	host, port, _ := strings.Cut(steal, ":")
+	// A bare hostname would also bind 127.0.0.1:443 — the gateway's own port.
+	for _, need := range []string{
+		"\tbind l4chan/cover-2 " + host + "\n",
+		":" + port + ", \"cov.example.com:" + port + "\" {\n",
+	} {
+		if !strings.Contains(inst.ConfigText, need) {
+			t.Fatalf("steal dest %s not served, missing %q:\n%s", steal, need, inst.ConfigText)
+		}
+	}
+}
+
+func TestStandaloneCoverInstance_OffWhileAbsorbed(t *testing.T) {
+	stubGatewayChan(t, true)
+	dir := t.TempDir()
+	cert, key := writeTestCert(t, dir, time.Now().Add(24*time.Hour), "cov.example.com")
+	cover := &model.Inbound{
+		Id: 2, Protocol: model.Cover, Port: 443, Enable: true, Listen: "127.0.0.1",
+		Settings: `{"enabled":true,"hostname":"cov.example.com","siteSource":"upstream","siteUpstream":"http://127.0.0.1:8080"}`,
+	}
+	gw := &model.Inbound{
+		Id: 9, Protocol: model.Gateway, Port: 443, Enable: true,
+		Settings: `{"enabled":true,"unified":true,"snapshot":[{"inboundId":2}]}`,
+	}
+	for _, tc := range []struct {
+		name string
+		all  []*model.Inbound
+		want bool
+	}{
+		{"alone", []*model.Inbound{cover}, true},
+		// Its 127.0.0.1:443 would share the gateway's socket via SO_REUSEPORT.
+		{"absorbed by unified gateway", []*model.Inbound{cover, gw}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inst, ok := StandaloneCoverInstance(cover, tc.all, nil, cert, key)
+			if !ok || inst.Enabled != tc.want {
+				t.Fatalf("ok=%v enabled=%v, want enabled=%v", ok, inst.Enabled, tc.want)
+			}
+		})
+	}
+}
+
 func TestGatewayInstance_LegacyIgnoresChan(t *testing.T) {
 	stubGatewayChan(t, true)
 	gw := &model.Inbound{
@@ -651,4 +805,56 @@ func TestDumpUnifiedGatewayCaddyfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("wrote %s\n%s", out, body)
+}
+
+func TestBuildPreview_UDPNote(t *testing.T) {
+	rows := BuildPreview(443, "node.example.com", []*model.Inbound{
+		{Id: 1, Protocol: model.AWG, Enable: true, Port: 51820},
+	}, "")
+	if len(rows) != 1 || rows[0].Note != "UDP — not behind the site" || rows[0].CanInside {
+		t.Fatalf("%+v", rows[0])
+	}
+}
+
+func TestCanHideInside(t *testing.T) {
+	ws := &model.Inbound{Protocol: model.VLESS, StreamSettings: `{"network":"ws","security":"tls","wsSettings":{"path":"/old"}}`}
+	ok, path := CanHideInside(ws)
+	if !ok || path != "/old" {
+		t.Fatalf("ws: %v %q", ok, path)
+	}
+	reality := &model.Inbound{Protocol: model.VLESS, StreamSettings: `{"network":"tcp","security":"reality"}`}
+	if ok, _ := CanHideInside(reality); ok {
+		t.Fatal("reality must not hide inside the site")
+	}
+	if ok, _ := CanHideInside(&model.Inbound{Protocol: model.AWG}); ok {
+		t.Fatal("awg")
+	}
+	if ok, _ := CanHideInside(&model.Inbound{Protocol: model.Naive}); !ok {
+		t.Fatal("naive")
+	}
+}
+
+func TestSetPlainPath(t *testing.T) {
+	got := SetPlainPath(`{"network":"ws","security":"tls","tlsSettings":{"serverName":"a"},"wsSettings":{"path":"/"}}`, "/secret")
+	if !strings.Contains(got, `"path":"/secret"`) || !strings.Contains(got, `"security":"none"`) || strings.Contains(got, "tlsSettings") {
+		t.Fatalf("%s", got)
+	}
+}
+
+func TestAppendCoverRoute(t *testing.T) {
+	got, err := AppendCoverRoute(`{"hostname":"shop.example"}`, "/secret", "127.0.0.1:1443")
+	if err != nil || !strings.Contains(got, `"path":"/secret"`) || !strings.Contains(got, "shop.example") {
+		t.Fatalf("%v %s", err, got)
+	}
+	again, err := AppendCoverRoute(got, "/secret", "127.0.0.1:1443")
+	if err != nil || strings.Count(again, `"/secret"`) != 1 {
+		t.Fatalf("dup: %v %s", err, again)
+	}
+}
+
+func TestRevertUpdates_EmptyListen(t *testing.T) {
+	u := RevertUpdates(GatewaySnapshotRow{Listen: "", Port: 443, StreamSettings: `{"security":"reality"}`})
+	if _, ok := u["listen"]; !ok || u["listen"] != "" {
+		t.Fatalf("empty listen dropped: %#v", u)
+	}
 }

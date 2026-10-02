@@ -792,6 +792,9 @@
         "awgKeepaliveTimeoutHint": "AWG3 سطح دستگاه: فاصله keepalive به ثانیه (سطح دستگاه، نه به‌ازای peer). 0 = پیش‌فرض kernel (۱۰ ث). بازه ۰–۶۵۵۳۵.",
         "awgMaxHandshakeAttempts": "MaxHandshakeAttempts",
         "awgMaxHandshakeAttemptsHint": "AWG3 سطح دستگاه: حداکثر تلاش دست‌دادن پیش از غیرفعال شدن peer. 0 = پیش‌فرض kernel (18 = 90/REKEY_TIMEOUT). بازه ۰–۶۵۵۳۵.",
+        "awgRoutingMode": "Xray routing mode",
+        "awgRoutingModeHint": "Off: direct. TUN: legacy mode. TPROXY: kernel AWG, IPv4 TCP/UDP only; ICMP and IPv6 are blocked. Changing mode briefly interrupts connections. The port must be free for TCP and UDP.",
+        "awgTproxyPort": "Local TPROXY port",
         "awgRouteThroughXray": "مسیریابی از طریق Xray",
         "awgRouteThroughXrayHint": "بسته‌های رمزگشایی‌شده رابط هسته AWG را از طریق اینباند TUN تزریقی به روتر Xray بفرستید تا خروجی از قوانین مسیریابی پیروی کند. معادل routeThroughXray در mtproto.",
         "awgRouteOutbound": "آوت‌باند مسیر",
@@ -857,6 +860,8 @@
         "anytlsPasswordHint": "Empty = auto-generate on save",
         "anytlsSni": "SNI / domain",
         "anytlsSniHint": "Must be covered by the panel TLS certificate (x-ui SSL). Empty cert paths use Settings → Panel SSL.",
+        "anytlsRouteThroughXray": "Route through Xray",
+        "anytlsRouteThroughXrayHint": "AnyTLS outbound TCP (uid lucx-mtproxy) is redirected into an Xray SOCKS bridge. On = Xray routing rules and outbounds apply. Off = direct egress (default).",
         "tproxyNote": "Telegram WEB proxy (tproxy-server). Needs hostname:443, panel TLS cert covering the hostname, camouflage site, and binaries on Settings → Cores (tproxy-server, MTProxy, Caddy/NaiveProxy). Clients: Telegram Desktop WEB proxy. Share: t.me/webproxy",
         "tproxyHostname": "Hostname",
         "tproxyHostnameHint": "Bare DNS name, no https:// or port. Must match the TLS certificate.",
@@ -982,7 +987,7 @@
         "csqttVkHashes": "VK call hashes",
         "csqttVkHashesHint": "Comma-separated live VK TURN hashes (up to 6)",
         "csqttRouteThroughXray": "Route through Xray",
-        "csqttRouteThroughXrayHint": "Send csqtt1 packets into an Xray TUN via policy routing so egress follows routing rules / outbound. On by default. Off = binary MASQUERADE to the host NIC.",
+        "csqttRouteThroughXrayHint": "Off by default (host NAT). On sends csqtt1 into an Xray TUN so egress follows routing rules.",
         "csqttRouteOutbound": "Outbound",
         "csqttRouteOutboundHint": "Optional. Force CSQTT traffic out through this outbound (or balancer). Leave empty to let your Xray routing rules decide.",
         "csqttRouteOutboundPlaceholder": "Use routing rules"
@@ -1024,7 +1029,10 @@
         "live": "Live",
         "address": "Address",
         "version": "Version",
-        "savedDisabled": "After import the old Docker/awg3 manager is stopped and the inbound is enabled. Stacks that share 10.8.1.0/24 need different subnets before more than one kernel iface is up."
+        "savedDisabled": "After import the old Docker/awg3 manager is stopped and the inbound is enabled. Stacks that share 10.8.1.0/24 need different subnets before more than one kernel iface is up.",
+        "delete": "Delete selected",
+        "deleteConfirm": "Stop and remove the selected installs from this host? Panel inbounds are not created or deleted.",
+        "deleted": "Removed {count}."
       },
       "protocolNames": {
         "awg": "AmneziaWG (kernel)",
@@ -1881,6 +1889,11 @@
       "subHappColorProfileDesc": "تم رنگی سفارشی iOS به صورت رشته JSON، یا resetcolors برای بازگشت به رنگ‌های پیش‌فرض.",
       "subHappPingType": "روش تست پینگ",
       "subHappPingTypeDesc": "روش اندازه‌گیری تأخیر نودها در Happ: از طریق پروکسی (GET یا HEAD)، TCP یا ICMP.",
+      "subHappLocalProxyAuth": "احراز هویت پروکسی محلی",
+      "subHappLocalProxyAuthDesc": "هدرهای socks-auth-mode / http-auth-mode را به Happ می‌فرستد. بدون احراز هویت، هر برنامه‌ای روی دستگاه می‌تواند از پروکسی محلی SOCKS5/HTTP برنامه Happ به تونل برسد و نشانی سرور را بفهمد. «خودکار» باعث می‌شود Happ اعتبارنامه تصادفی بسازد؛ به Provider ID نیازی نیست.",
+      "subHappLocalProxyAuthAuto": "خودکار (اعتبارنامه تصادفی)",
+      "subHappLocalProxyAuthDisable": "غیرفعال",
+      "subHappLocalProxyAuthUnset": "ارسال نشود (پیش‌فرض کلاینت)",
       "subHappAutoConnect": "اتصال خودکار هنگام اجرا",
       "subHappAutoConnectDesc": "اتصال خودکار به وی‌پی‌ان با باز شدن برنامه Happ.",
       "subHappAutoConnectType": "راهبرد اتصال خودکار",
@@ -2718,7 +2731,9 @@
           "apply": "Apply selected",
           "revert": "Revert",
           "applied": "Mask applied",
-          "reverted": "Mask reverted"
+          "reverted": "Mask reverted",
+      "insideSite": "Inside the site",
+      "insideHint": "WS / HTTPUpgrade share the Cover hostname. A browser on / sees the site. Refresh the subscription after Apply."
     },
     "tunnels": {
       "title": "Tunnel tools",
@@ -3294,3 +3309,4 @@
   "disable": "غیرفعال‌سازی",
   "qrTooLarge": "کد QR برای نمایش خیلی بزرگ است — از دانلود یا کپی استفاده کنید"
 }
+

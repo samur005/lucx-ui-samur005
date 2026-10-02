@@ -32,6 +32,14 @@ type AnytlsConfig struct {
 	CertFile string `json:"certFile"`
 	KeyFile  string `json:"keyFile"`
 	Bind     string `json:"-"`
+
+	// RouteThroughXray redirects the sidecar's own outbound TCP (uid-scoped,
+	// lucx-mtproxy pattern, lucx.273) into a hidden Xray SOCKS inbound so
+	// Xray routing rules apply. anytls-go has no SOCKS option, so the bridge
+	// is iptables REDIRECT (tproxy pattern), not a dialer setting.
+	RouteThroughXray bool   `json:"routeThroughXray"`
+	RouteXrayPort    int    `json:"routeXrayPort"`
+	OutboundTag      string `json:"outboundTag"`
 }
 
 // DefaultAnytlsConfig returns factory defaults (port 8443, as in the
