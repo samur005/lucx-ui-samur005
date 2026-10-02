@@ -60,3 +60,12 @@
     padding-inline: 10px;
   }
 }
+
+.inbound-form-modal__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-inline-end: 28px;
+  width: 100%;
+}

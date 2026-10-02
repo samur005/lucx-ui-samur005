@@ -704,6 +704,16 @@
         "burstBytesPerSec": "Saniye Başına Patlama Baytı",
         "burstBytesPerSecTip": "Sabit hızın üzerindeki kısa patlamalar için pay (token-bucket boyutu). Saniye Başına Bayt değerinden düşükse ona eşitlenecek şekilde yükseltilir.",
         "autoFill": "Otomatik Doldur",
+      "templates": {
+        "button": "Şablonlar",
+        "applied": "Şablon uygulandı",
+        "vlessXhttpReality": "VLESS + XHTTP + Reality",
+        "vlessGrpcReality": "VLESS + gRPC + Reality",
+        "vlessGrpcTls": "VLESS + gRPC + TLS",
+        "vlessWsTls": "VLESS + WS + TLS",
+        "vlessHttpupgradeTls": "VLESS + HTTPUpgrade + TLS",
+        "vlessKcp": "VLESS + KCP"
+      },
         "awgBrowserProfile": "Tarayıcı profili",
         "awgBrowserProfileHint": "TLS profili için taklit edilecek tarayıcı TLS parmak izi. Chrome GREASE kullanır; Firefox padding ile NSS sıralaması; Safari Apple sıralaması kullanır.",
         "awgBrowserChrome": "Chrome (en yeni)",

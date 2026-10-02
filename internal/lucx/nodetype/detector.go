@@ -21,6 +21,13 @@ const (
 	TypeVanilla = "vanilla"
 )
 
+// FeatureQwdttPersonal is advertised (by /panel/api/lucx/hello only - it is
+// deliberately NOT in DefaultLucXFeatures, which is the fallback assumed for
+// nodes that report nothing) by builds whose qWDTT sidecar registers per-client
+// passwords. A master hands out personal passwords for a node-managed qWDTT
+// inbound only when its node advertises this.
+const FeatureQwdttPersonal = "qwdtt-personal"
+
 var DefaultLucXFeatures = []string{
 	"awg",
 	"mtproto",

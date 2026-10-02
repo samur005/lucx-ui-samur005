@@ -44,6 +44,8 @@ import { tunnelsApi } from '@/api/tunnels';
 import { FormField, useZodForm } from '@/components/form/rhf';
 import { OlcrtcConfigSchema, type OlcrtcConfig, type OlcrtcStatus } from '@/schemas/tunnel';
 
+import { OlcrtcWbPanel } from './OlcrtcWbPanel';
+
 type ProbeState = 'running' | 'stopped';
 
 function probeState(status: OlcrtcStatus | undefined): ProbeState {
@@ -300,6 +302,13 @@ export function OlcrtcCard() {
         </Col>
 
         <Col xs={24} md={16}>
+          <OlcrtcWbPanel
+            onRoom={(roomId) => {
+              form.setValue('provider', 'wbstream', { shouldDirty: true });
+              form.setValue('roomId', roomId, { shouldDirty: true });
+            }}
+            onInvalidate={invalidate}
+          />
           <FormProvider {...form}>
             <Form layout="vertical" onFinish={() => void onSave()}>
               <Row gutter={16}>

@@ -1,3 +1,5 @@
+// Copyright (c) 2025 LucX-UI Project / samur005 fork.
+// Licensed under the PolyForm Noncommercial License 1.0.0.
 package tunnel
 
 import (
@@ -9,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/mhsanaei/3x-ui/v3/internal/lucx/vkcreator"
 )
 
 var (
@@ -19,6 +23,11 @@ var (
 
 const vkHashTTL = 4 * time.Hour
 
+// EnsureVkHashes fills VkHashes when empty:
+//  1. config already set
+//  2. LUCX_VK_HASH env
+//  3. native VK creator (panel cookies → calls.start) when cookies configured
+//  4. optional external WDTT HTTP via LUCX_WDTT_URL
 func (c QwdttConfig) EnsureVkHashes() (QwdttConfig, error) {
 	if strings.TrimSpace(c.VkHashes) != "" {
 		return c, nil
@@ -42,6 +51,13 @@ func fetchVkHash() string {
 	if h := strings.TrimSpace(os.Getenv("LUCX_VK_HASH")); h != "" {
 		vkHashCache, vkHashAt = h, time.Now()
 		return h
+	}
+	// Prefer native in-process generator when panel cookies are present.
+	if vkcreator.HasCookies() {
+		if h, err := vkcreator.GenerateHash(); err == nil && strings.TrimSpace(h) != "" {
+			vkHashCache, vkHashAt = h, time.Now()
+			return h
+		}
 	}
 	base := strings.TrimRight(strings.TrimSpace(os.Getenv("LUCX_WDTT_URL")), "/")
 	if base == "" {

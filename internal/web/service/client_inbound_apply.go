@@ -82,7 +82,9 @@ func (s *ClientService) delInboundClients(inboundSvc *InboundService, inboundId 
 		}
 	}
 
-	interfaceClients, ok := settings["clients"].([]any)
+	// LUCX-HOOK: a missing/null clients key is an empty list (share-only
+	// sidecars and node-adopted inbounds carry none).
+	interfaceClients, ok := inboundSettingsClients(settings)
 	if !ok {
 		return false, common.NewError("invalid clients format in inbound settings")
 	}
@@ -108,22 +110,38 @@ func (s *ClientService) delInboundClients(inboundSvc *InboundService, inboundId 
 		newClients = append(newClients, client)
 	}
 
+	// LUCX-HOOK: share-only sidecars (qWDTT/CSQTT/olcRTC/tproxy) keep their
+	// clients in client_inbounds, never in settings — detach the linked ones
+	// without rewriting the settings JSON.
+	sidecarOnly := false
+	if len(removed) == 0 {
+		for _, rec := range recs {
+			if rec.Email != "" && sidecarClientLinked(oldInbound, rec.Email) {
+				removed = append(removed, removedClient{email: rec.Email})
+			}
+		}
+		sidecarOnly = len(removed) > 0
+	}
+	// END LUCX-HOOK
+
 	if len(removed) == 0 {
 		return false, nil
 	}
 
 	db := database.GetDB()
-	newClients = compactOrphans(db, newClients)
-	if newClients == nil {
-		newClients = []any{}
-	}
-	settings["clients"] = newClients
-	newSettings, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return false, err
-	}
 	prevSettings := oldInbound.Settings
-	oldInbound.Settings = string(newSettings)
+	if !sidecarOnly {
+		newClients = compactOrphans(db, newClients)
+		if newClients == nil {
+			newClients = []any{}
+		}
+		settings["clients"] = newClients
+		newSettings, err := json.MarshalIndent(settings, "", "  ")
+		if err != nil {
+			return false, err
+		}
+		oldInbound.Settings = string(newSettings)
+	}
 
 	var sharedSet map[string]bool
 	if !keepTraffic {
@@ -336,7 +354,10 @@ func (s *ClientService) AddInboundClient(inboundSvc *InboundService, data *model
 		return false, err
 	}
 
-	interfaceClients := settings["clients"].([]any)
+	interfaceClients, ok := inboundSettingsClients(settings) // LUCX-HOOK: no panic on a missing key
+	if !ok {
+		return false, common.NewError("invalid clients format in inbound settings")
+	}
 	nowTs := time.Now().Unix() * 1000
 	for i := range interfaceClients {
 		if cm, ok := interfaceClients[i].(map[string]any); ok {
@@ -679,7 +700,10 @@ func (s *ClientService) UpdateInboundClient(inboundSvc *InboundService, data *mo
 		return false, err
 	}
 
-	interfaceClients := settings["clients"].([]any)
+	interfaceClients, ok := inboundSettingsClients(settings) // LUCX-HOOK: no panic on a missing key
+	if !ok {
+		return false, common.NewError("invalid clients format in inbound settings")
+	}
 
 	oldInbound, err := inboundSvc.GetInbound(data.Id)
 	if err != nil {
@@ -1124,7 +1148,9 @@ func (s *ClientService) DelInboundClientByEmail(inboundSvc *InboundService, inbo
 		return false, err
 	}
 
-	interfaceClients, ok := settings["clients"].([]any)
+	// LUCX-HOOK: a missing/null clients key is an empty list (share-only
+	// sidecars and node-adopted inbounds carry none).
+	interfaceClients, ok := inboundSettingsClients(settings)
 	if !ok {
 		return false, common.NewError("invalid clients format in inbound settings")
 	}
@@ -1146,22 +1172,32 @@ func (s *ClientService) DelInboundClientByEmail(inboundSvc *InboundService, inbo
 		}
 	}
 
+	// LUCX-HOOK: share-only sidecars (qWDTT/CSQTT/olcRTC/tproxy) keep their
+	// clients in client_inbounds, never in settings. A linked client is still
+	// removed (stats, link, node push) — only the settings JSON stays as is.
+	sidecarLinked := false
 	if !found {
-		return false, fmt.Errorf("%w for email: %s", ErrClientNotInInbound, email)
-	}
-	db := database.GetDB()
-	newClients = compactOrphans(db, newClients)
-	if newClients == nil {
-		newClients = []any{}
-	}
-	settings["clients"] = newClients
-	newSettings, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return false, err
+		if !sidecarClientLinked(oldInbound, email) {
+			return false, fmt.Errorf("%w for email: %s", ErrClientNotInInbound, email)
+		}
+		sidecarLinked = true
 	}
 
 	prevSettings := oldInbound.Settings
-	oldInbound.Settings = string(newSettings)
+	if !sidecarLinked {
+		db := database.GetDB()
+		newClients = compactOrphans(db, newClients)
+		if newClients == nil {
+			newClients = []any{}
+		}
+		settings["clients"] = newClients
+		newSettings, err := json.MarshalIndent(settings, "", "  ")
+		if err != nil {
+			return false, err
+		}
+		oldInbound.Settings = string(newSettings)
+	}
+	// END LUCX-HOOK
 
 	emailShared, err := inboundSvc.emailUsedByOtherInbounds(email, inboundId)
 	if err != nil {
@@ -1317,7 +1353,10 @@ func (s *ClientService) SetClientTelegramUserID(inboundSvc *InboundService, traf
 	if err != nil {
 		return false, err
 	}
-	clients := settings["clients"].([]any)
+	clients, ok := inboundSettingsClients(settings) // LUCX-HOOK: no panic on a missing key
+	if !ok {
+		return false, common.NewError("invalid clients format in inbound settings")
+	}
 	var newClients []any
 	for client_index := range clients {
 		c := clients[client_index].(map[string]any)

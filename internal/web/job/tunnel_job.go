@@ -446,6 +446,15 @@ func (j *TunnelJob) collectQwdttTraffic() {
 	}
 	var snaps []tunnel.SidecarTraffic
 	emailsByTag := map[string][]string{}
+	// Per-client credentials: users to register per sidecar state dir, and the
+	// password -> email maps used to read per-client counters back.
+	type qwdttTarget struct {
+		tag, dir   string
+		byPassword map[string]string
+	}
+	var targets []qwdttTarget
+	usersByDir := map[string][]tunnel.QwdttUser{}
+	complete := true // false when any client list is missing: never revoke orphans then
 	for _, ib := range inbounds {
 		if ib == nil || ib.Protocol != model.Qwdtt || !ib.Enable || ib.NodeID != nil {
 			continue
@@ -454,10 +463,88 @@ func (j *TunnelJob) collectQwdttTraffic() {
 		if tag == "" {
 			continue
 		}
-		emailsByTag[tag] = anytlsEmailsForInbound(ib)
+		clients, cerr := (&service.ClientService{}).ListForInbound(database.GetDB(), ib.Id)
+		emails := make([]string, 0, len(clients))
+		for i := range clients {
+			if clients[i].Enable {
+				if e := strings.TrimSpace(clients[i].Email); e != "" {
+					emails = append(emails, e)
+				}
+			}
+		}
+		emailsByTag[tag] = emails
 		snaps = append(snaps, tunnel.GetManager().CollectQwdttTraffic(tag))
+		if cerr != nil {
+			complete = false
+			continue
+		}
+		owner, dir, ok := tunnel.QwdttSidecarIdentity(ib)
+		if !ok {
+			continue
+		}
+		byPassword := map[string]string{}
+		for i := range clients {
+			pw := tunnel.QwdttClientPassword(owner, tunnel.QwdttClientKey(clients[i].ID, clients[i].Email))
+			if pw == "" {
+				continue
+			}
+			usersByDir[dir] = append(usersByDir[dir], tunnel.QwdttUser{
+				Email:    strings.TrimSpace(clients[i].Email),
+				Password: pw,
+				Active:   qwdttClientActive(&clients[i]),
+			})
+			if clients[i].Enable {
+				byPassword[pw] = strings.TrimSpace(clients[i].Email)
+			}
+		}
+		// A sole client keeps the legacy attribution (whole-interface deltas);
+		// per-client counters are only needed once clients must be told apart.
+		if len(emails) > 1 {
+			targets = append(targets, qwdttTarget{tag: tag, dir: dir, byPassword: byPassword})
+		}
 	}
 	j.commitSidecarScrape("qwdtt", snaps, emailsByTag)
+	pid := tunnel.GetManager().PidOf(tunnel.QwdttKey)
+	for dir, users := range usersByDir {
+		if changed, err := tunnel.SyncQwdttUsers(dir, pid, users, complete); err != nil {
+			logger.Warning("tunnel job: qwdtt per-client passwords sync failed:", err)
+		} else if changed {
+			logger.Infof("tunnel job: qwdtt per-client passwords synced (%d clients)", len(users))
+		}
+	}
+	for _, t := range targets {
+		rows := tunnel.GetManager().CollectQwdttClientTraffic(t.tag, t.dir, t.byPassword)
+		if len(rows) == 0 {
+			continue
+		}
+		clientTraffics := make([]*xray.ClientTraffic, 0, len(rows))
+		onlineEmails := make([]string, 0, len(rows))
+		for _, r := range rows {
+			if r.Up > 0 || r.Down > 0 {
+				clientTraffics = append(clientTraffics, &xray.ClientTraffic{Email: r.Email, Up: r.Up, Down: r.Down})
+			}
+			if r.Online {
+				onlineEmails = append(onlineEmails, r.Email)
+			}
+		}
+		if len(clientTraffics) > 0 {
+			if _, _, err := j.inboundService.AddTraffic(nil, clientTraffics); err != nil {
+				logger.Warning("tunnel job: add qwdtt client traffic failed:", err)
+			}
+		}
+		if len(onlineEmails) > 0 {
+			j.inboundService.RefreshLocalOnlineClients(onlineEmails, []string{t.tag})
+		}
+	}
+}
+
+// qwdttClientActive reports whether a client may hold a live personal qWDTT
+// password: enabled and not past its expiry (negative expiry = delayed start).
+func qwdttClientActive(c *model.Client) bool {
+	if c == nil || !c.Enable {
+		return false
+	}
+	return c.ExpiryTime <= 0 || c.ExpiryTime > time.Now().UnixMilli()
 }
 
 func (j *TunnelJob) collectTproxyTraffic() {

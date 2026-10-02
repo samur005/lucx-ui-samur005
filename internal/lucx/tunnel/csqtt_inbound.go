@@ -42,6 +42,10 @@ func CsqttConfigFromInbound(ib *model.Inbound) (CsqttConfig, bool) {
 			}
 		}
 	}
+	if ib.NodeID != nil { // LUCX-HOOK: sidecar runs on the node, not here
+		cfg.nodeManaged = true
+		cfg.SubHost = NodeSidecarSubHost(cfg.SubHost)
+	}
 	return cfg.Merge(), true
 }
 

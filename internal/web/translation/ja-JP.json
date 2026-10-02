@@ -704,6 +704,16 @@
           "custom": "カスタム"
         },
         "autoFill": "自動入力",
+      "templates": {
+        "button": "テンプレート",
+        "applied": "テンプレートを適用しました",
+        "vlessXhttpReality": "VLESS + XHTTP + Reality",
+        "vlessGrpcReality": "VLESS + gRPC + Reality",
+        "vlessGrpcTls": "VLESS + gRPC + TLS",
+        "vlessWsTls": "VLESS + WS + TLS",
+        "vlessHttpupgradeTls": "VLESS + HTTPUpgrade + TLS",
+        "vlessKcp": "VLESS + KCP"
+      },
         "awgBrowserProfile": "ブラウザプロファイル",
         "awgBrowserProfileHint": "TLSプロファイルで模倣するブラウザのTLSフィンガープリント。ChromeはGREASE、Firefoxはパディング付きNSS順、SafariはApple順を使用します。",
         "awgBrowserChrome": "Chrome (最新)",

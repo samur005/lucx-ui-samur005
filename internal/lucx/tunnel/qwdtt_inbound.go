@@ -16,6 +16,20 @@ import (
 const QwdttKey = "qwdtt"
 
 func QwdttConfigFromInbound(ib *model.Inbound) (QwdttConfig, bool) {
+	cfg, ok := qwdttConfigFromInboundNoHash(ib)
+	if !ok {
+		return QwdttConfig{}, false
+	}
+	if c2, err := cfg.EnsureVkHashes(); err == nil {
+		cfg = c2
+	}
+	return cfg, true
+}
+
+// qwdttConfigFromInboundNoHash is QwdttConfigFromInbound without the VK-hash
+// auto-fill (which may hit the network); enough for password / config-dir
+// lookups done on every tunnel-job tick.
+func qwdttConfigFromInboundNoHash(ib *model.Inbound) (QwdttConfig, bool) {
 	if ib == nil || ib.Protocol != model.Qwdtt {
 		return QwdttConfig{}, false
 	}
@@ -40,10 +54,11 @@ func QwdttConfigFromInbound(ib *model.Inbound) (QwdttConfig, bool) {
 			}
 		}
 	}
-	cfg = cfg.Merge()
-	if c2, err := cfg.EnsureVkHashes(); err == nil {
-		cfg = c2
+	if ib.NodeID != nil { // LUCX-HOOK: sidecar runs on the node, not here
+		cfg.nodeManaged = true
+		cfg.SubHost = NodeSidecarSubHost(cfg.SubHost)
 	}
+	cfg = cfg.Merge()
 	return cfg, true
 }
 
@@ -89,4 +104,22 @@ func QwdttDTLSPort(cfg QwdttConfig) int {
 		}
 	}
 	return 56000
+}
+
+// QwdttSidecarIdentity returns the owner password and the state directory the
+// local sidecar of a qWDTT inbound runs with (no network access). ok is false
+// for a non-qWDTT inbound or when no owner password is set.
+func QwdttSidecarIdentity(ib *model.Inbound) (password, configDir string, ok bool) {
+	cfg, found := qwdttConfigFromInboundNoHash(ib)
+	if !found {
+		return "", "", false
+	}
+	password = strings.TrimSpace(cfg.Password)
+	if password == "" {
+		return "", "", false
+	}
+	if strings.TrimSpace(cfg.ConfigDir) == "" {
+		cfg.ConfigDir = dataDirFor(QwdttKey, Qwdtt)
+	}
+	return password, cfg.ResolveConfigDir(), true
 }

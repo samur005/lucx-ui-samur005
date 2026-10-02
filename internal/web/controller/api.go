@@ -194,7 +194,10 @@ func (a *APIController) initRouter(g *gin.RouterGroup) {
 	// END LUCX-HOOK
 	// LUCX-HOOK: Tunnel sidecars (NaiveProxy) — config/lifecycle/logs API.
 	// Routes live under /panel/api/tunnel/*.
-	a.tunnelController = NewTunnelController(api.Group("/tunnel"))
+	tunnelGroup := api.Group("/tunnel")
+	a.tunnelController = NewTunnelController(tunnelGroup)
+	a.tunnelController.registerVKRoutes(tunnelGroup)
+	a.tunnelController.registerWBRoutes(tunnelGroup)
 	// END LUCX-HOOK
 	// LUCX-HOOK: LucX capability probe for multi-node deploy gating.
 	// Masters call GET /panel/api/lucx/hello on remotes to learn nodeType/features.

@@ -1,0 +1,1 @@
+> **Fork samur005 tip (also in [docs/FORK.md](docs/FORK.md)):** native qWDTT vk-hash generator + inbound Templates. Stock `install.sh` / `x-ui update` install the **upstream** binary **without** these features. Full install/update guide: **[docs/FORK.md](docs/FORK.md)** (RU) · [docs/FORK.en.md](docs/FORK.en.md) (EN) · landing [README.ru_RU.md](README.ru_RU.md).

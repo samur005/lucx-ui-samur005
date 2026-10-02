@@ -4,13 +4,24 @@
 // Commercial use (including VPN resale) requires explicit written permission from the author.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Input, InputNumber, Select, Switch, Alert } from 'antd';
+import {
+  Input,
+  InputNumber,
+  Select,
+  Switch,
+  Alert,
+  Button,
+  Space,
+  Typography,
+  message,
+} from 'antd';
 import { useFormContext, useWatch } from 'react-hook-form';
 
 import { FormField } from '@/components/form/rhf';
 import { useOutboundTags } from '@/api/queries/useOutboundTags';
+import { tunnelsApi } from '@/api/tunnels';
 
 export default function OlcrtcFields() {
   const { t } = useTranslation();
@@ -21,6 +32,30 @@ export default function OlcrtcFields() {
     | boolean
     | undefined;
   const { data: outboundTags } = useOutboundTags();
+  const [wbMessage, wbMessageCtx] = message.useMessage();
+  const [wbBusy, setWbBusy] = useState(false);
+
+  // WB Stream room generator (session stored on Tunnels → olcRTC → WB Stream).
+  const createWbRoom = async () => {
+    setWbBusy(true);
+    try {
+      const res = await tunnelsApi.wbCreate({ apply: false });
+      if (res.success && res.obj?.room_id) {
+        setValue('settings.roomId', res.obj.room_id, { shouldDirty: true });
+        wbMessage.success(t('pages.inbounds.form.olcrtcWbCreated'));
+      } else {
+        const noSession = /not configured|no cookies/i.test(res.msg ?? '');
+        wbMessage.error(
+          noSession
+            ? t('pages.inbounds.form.olcrtcWbNoSession')
+            : res.msg || t('pages.inbounds.form.olcrtcWbFailed'),
+          6,
+        );
+      }
+    } finally {
+      setWbBusy(false);
+    }
+  };
 
   const transportOptions =
     provider === 'telemost'
@@ -109,12 +144,31 @@ export default function OlcrtcFields() {
           ]}
         />
       </FormField>
+      {wbMessageCtx}
       <FormField
         name={['settings', 'roomId']}
         label={t('pages.inbounds.form.olcrtcRoomId')}
         tooltip={t('pages.inbounds.form.olcrtcRoomIdHint')}
+        extra={
+          provider === 'wbstream' ? (
+            <Space direction="vertical" size={2} style={{ marginTop: 4 }}>
+              <Button size="small" loading={wbBusy} onClick={() => void createWbRoom()}>
+                {t('pages.inbounds.form.olcrtcWbCreateRoom')}
+              </Button>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {t('pages.inbounds.form.olcrtcWbRoomHint')}
+              </Typography.Text>
+            </Space>
+          ) : undefined
+        }
       >
-        <Input placeholder="https://meet.jit.si/your-room" />
+        <Input
+          placeholder={
+            provider === 'wbstream'
+              ? 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+              : 'https://meet.jit.si/your-room'
+          }
+        />
       </FormField>
       <FormField
         name={['settings', 'cryptoKey']}

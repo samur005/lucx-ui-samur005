@@ -100,6 +100,8 @@ import {
 } from './transport';
 import { RealityForm, TlsForm } from './security';
 import { useSecurityActions } from './useSecurityActions';
+import InboundTemplatesButton from './InboundTemplatesButton';
+import { findInboundCreateTemplate } from '@/lib/xray/inbound-templates';
 import { useInboundFallbacks } from './useInboundFallbacks';
 import FallbacksCard from './FallbacksCard';
 import SniffingTab from './SniffingTab';
@@ -1072,6 +1074,42 @@ export default function InboundFormModal({
     setV('streamSettings', cleaned);
   };
 
+  /*
+   * Apply a VLESS transport+security preset from the Templates dropdown.
+   * Reuses onNetworkChange / onSecurityChange so Reality keypair, shortIds,
+   * spiderX, TLS cert seed, and KCP finalmask stay consistent with manual
+   * picks. Preserves remark/port/listen/tag/clients and other unrelated fields.
+   */
+  const applyInboundTemplate = async (templateId: string) => {
+    const tmpl = findInboundCreateTemplate(templateId);
+    if (!tmpl) return;
+
+    const currentProtocol = (getV('protocol') as string) || '';
+    if (currentProtocol !== Protocols.VLESS) {
+      setV('protocol', Protocols.VLESS);
+      setV('settings', createDefaultInboundSettings('vless') ?? undefined);
+      setV('disableFlow', false);
+    }
+
+    onNetworkChange(tmpl.network);
+
+    const randomPath = `/${RandomUtil.randomLowerAndNum(8)}`;
+    if (tmpl.network === 'ws') {
+      setV('streamSettings.wsSettings.path', randomPath);
+    } else if (tmpl.network === 'xhttp') {
+      setV('streamSettings.xhttpSettings.path', randomPath);
+    } else if (tmpl.network === 'httpupgrade') {
+      setV('streamSettings.httpupgradeSettings.path', randomPath);
+    } else if (tmpl.network === 'grpc') {
+      setV('streamSettings.grpcSettings.serviceName', RandomUtil.randomLowerAndNum(12));
+    }
+
+    await onSecurityChange(tmpl.security);
+
+    setActiveTab(tmpl.security === 'none' ? 'stream' : 'security');
+    messageApi.success(t('pages.inbounds.form.templates.applied'));
+  };
+
   const streamTab = (
     <>
       {hasSelectableTransport && (
@@ -1290,7 +1328,12 @@ export default function InboundFormModal({
       {modalContextHolder}
       <Modal
         open={open}
-        title={title}
+        title={
+          <div className="inbound-form-modal__title">
+            <span>{title}</span>
+            <InboundTemplatesButton onSelect={applyInboundTemplate} disabled={saving} />
+          </div>
+        }
         okText={okText}
         cancelText={t('close')}
         confirmLoading={saving}

@@ -704,6 +704,16 @@
         "burstBytesPerSec": "Byte per detik burst",
         "burstBytesPerSecTip": "Kelonggaran untuk burst singkat di atas laju tetap (ukuran token-bucket). Jika lebih kecil dari Byte per detik, nilainya dinaikkan agar sama.",
         "autoFill": "Isi Otomatis",
+      "templates": {
+        "button": "Template",
+        "applied": "Template diterapkan",
+        "vlessXhttpReality": "VLESS + XHTTP + Reality",
+        "vlessGrpcReality": "VLESS + gRPC + Reality",
+        "vlessGrpcTls": "VLESS + gRPC + TLS",
+        "vlessWsTls": "VLESS + WS + TLS",
+        "vlessHttpupgradeTls": "VLESS + HTTPUpgrade + TLS",
+        "vlessKcp": "VLESS + KCP"
+      },
         "awgBrowserProfile": "Profil browser",
         "awgBrowserProfileHint": "Sidik jari TLS browser yang ditiru untuk profil TLS. Chrome memakai GREASE; Firefox memakai urutan NSS dengan padding; Safari memakai urutan Apple.",
         "awgBrowserChrome": "Chrome (terbaru)",

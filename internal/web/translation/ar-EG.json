@@ -704,6 +704,16 @@
         "burstBytesPerSec": "بايت في الثانية للدفقة",
         "burstBytesPerSecTip": "السماح بدفقات قصيرة فوق المعدل الثابت (حجم token-bucket). لو أقل من بايت في الثانية بيترفع ليطابقه.",
         "autoFill": "الملء التلقائي",
+      "templates": {
+        "button": "قوالب",
+        "applied": "تم تطبيق القالب",
+        "vlessXhttpReality": "VLESS + XHTTP + Reality",
+        "vlessGrpcReality": "VLESS + gRPC + Reality",
+        "vlessGrpcTls": "VLESS + gRPC + TLS",
+        "vlessWsTls": "VLESS + WS + TLS",
+        "vlessHttpupgradeTls": "VLESS + HTTPUpgrade + TLS",
+        "vlessKcp": "VLESS + KCP"
+      },
         "awgBrowserProfile": "ملف المتصفح",
         "awgBrowserProfileHint": "بصمة TLS للمتصفح المراد محاكاتها لملف TLS. يستخدم Chrome تقنية GREASE؛ ويستخدم Firefox ترتيب NSS مع padding؛ ويستخدم Safari ترتيب Apple.",
         "awgBrowserChrome": "Chrome (الأحدث)",

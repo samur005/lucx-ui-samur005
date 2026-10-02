@@ -63,6 +63,10 @@ type QwdttConfig struct {
 
 	MigratedToInbound bool `json:"migratedToInbound,omitempty"`
 	MigratedInboundId int  `json:"migratedInboundId,omitempty"`
+
+	// nodeManaged marks a config parsed from a node-managed inbound on the
+	// master (never serialized): EnsureSubHost must not stamp this host's IP.
+	nodeManaged bool
 }
 
 // DefaultQwdttConfig returns sensible defaults for a fresh qWDTT core.
@@ -166,7 +170,7 @@ func (c QwdttConfig) WithPeerHost(host string) QwdttConfig {
 // ClientURI / subscription always have a peer after save. Dial-based probe
 // (no HTTP); fails open (leaves empty) when the host has no outbound route.
 func (c QwdttConfig) EnsureSubHost() QwdttConfig {
-	if strings.TrimSpace(c.SubHost) != "" {
+	if strings.TrimSpace(c.SubHost) != "" || c.nodeManaged {
 		return c
 	}
 	ip := detectOutboundIPv4()
@@ -317,11 +321,17 @@ type QwdttSubProfile struct {
 // QwdttSubscription is the public JSON document the Android client imports
 // (SpaceNeuroX subscription format).
 type QwdttSubscription struct {
-	SubscriptionName string            `json:"subscriptionName"`
-	Description      string            `json:"description,omitempty"`
-	Version          int               `json:"version"`
-	UpdatedAt        string            `json:"updatedAt"`
-	Profiles         []QwdttSubProfile `json:"profiles"`
+	SubscriptionName string `json:"subscriptionName"`
+	Description      string `json:"description,omitempty"`
+	// LUCX-HOOK: subscription traffic in MiB for the app's subscription card
+	// ("Трафик: used из limit"). TrafficUsedMb is a pointer so the app
+	// subscription always sends it (0 included) while the panel-UI document
+	// (nil) leaves it out; TrafficLimitMb is omitted when zero (unlimited).
+	TrafficUsedMb  *float64          `json:"trafficUsedMb,omitempty"`
+	TrafficLimitMb float64           `json:"trafficLimitMb,omitempty"`
+	Version        int               `json:"version"`
+	UpdatedAt      string            `json:"updatedAt"`
+	Profiles       []QwdttSubProfile `json:"profiles"`
 }
 
 // Subscription builds the Android subscription document. Returns an error

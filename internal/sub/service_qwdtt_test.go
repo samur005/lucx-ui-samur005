@@ -13,6 +13,7 @@ import (
 
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
+	"github.com/mhsanaei/3x-ui/v3/internal/lucx/tunnel"
 )
 
 // TestGetSubs_Qwdtt_SingleConfigLine locks the SpaceNeuroX 1.4.2 import
@@ -43,7 +44,7 @@ func TestGetSubs_Qwdtt_SingleConfigLine(t *testing.T) {
 	if err := db.Create(ib).Error; err != nil {
 		t.Fatalf("seed inbound: %v", err)
 	}
-	client := &model.ClientRecord{Email: email, SubID: subId, Enable: true}
+	client := &model.ClientRecord{Email: email, SubID: subId, UUID: "uuid-qwdtt-1", Enable: true}
 	if err := db.Create(client).Error; err != nil {
 		t.Fatalf("seed client: %v", err)
 	}
@@ -70,7 +71,11 @@ func TestGetSubs_Qwdtt_SingleConfigLine(t *testing.T) {
 	if strings.ContainsAny(got, "\r\n") || strings.HasPrefix(got, "wdtt://") {
 		t.Fatalf("must not append legacy wdtt://, got %q", got)
 	}
-	for _, want := range []string{"name=Home", "peer=1.2.3.4%3A56000", "pass=secret", "hashes=h1%2Ch2"} {
+	// The subscriber gets a personal password, never the shared owner one.
+	if strings.Contains(got, "pass=secret") {
+		t.Errorf("shared owner password leaked into a client's link: %s", got)
+	}
+	for _, want := range []string{"name=Home", "peer=1.2.3.4%3A56000", "pass=" + tunnel.QwdttClientPassword("secret", "uuid-qwdtt-1"), "hashes=h1%2Ch2"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("URI missing %q: %s", want, got)
 		}
