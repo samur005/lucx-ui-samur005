@@ -55,6 +55,9 @@ type NodeTrafficSyncJob struct {
 	// a per-inbound speed delta — node inbounds have no local Xray poll. Touched
 	// only from Run (serialized).
 	prevInboundTotals map[string]inboundSample
+	// LUCX-HOOK: per-client speed baseline for node-hosted clients (node_client_speed.go)
+	prevClientTotals map[string]inboundSample
+	// END LUCX-HOOK
 }
 
 type atomicBool struct {
@@ -160,6 +163,9 @@ func (j *NodeTrafficSyncJob) Run() {
 	// Derive per-node-inbound speed every tick (keeps the baseline fresh even
 	// with no dashboard open); only broadcast it when someone is watching.
 	inboundSpeed := j.nodeInboundSpeed()
+	// LUCX-HOOK: node clients have no local Xray poll either; derive their speed too
+	clientSpeed := j.nodeClientSpeed(time.Now().UnixMilli())
+	// END LUCX-HOOK
 
 	if !websocket.HasClients() {
 		return
@@ -219,6 +225,9 @@ func (j *NodeTrafficSyncJob) Run() {
 	// client-side, leaving the last shown value untouched; an empty (non-nil)
 	// slice marshals to [] and clears stale speeds.
 	trafficPayload["nodeTraffics"] = inboundSpeed
+	// LUCX-HOOK: same contract as nodeTraffics: [] clears idle clients, null is skipped
+	trafficPayload["nodeClientTraffics"] = clientSpeed
+	// END LUCX-HOOK
 	websocket.BroadcastTraffic(trafficPayload)
 
 	clientStats := map[string]any{"snapshot": snapshot}
