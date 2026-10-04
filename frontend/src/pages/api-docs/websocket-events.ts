@@ -129,6 +129,11 @@ const trafficPayloadSchema = {
       nullable: true,
       items: { $ref: '#/components/schemas/Traffic' },
     },
+    nodeClientTraffics: {
+      type: 'array',
+      nullable: true,
+      items: { $ref: '#/components/schemas/ClientTraffic' },
+    },
     onlineClients: stringArray,
     onlineByGuid: stringArrayMap,
     activeInbounds: stringArrayMap,
@@ -205,7 +210,7 @@ export function buildWebSocketEvents(
     {
       type: 'traffic',
       summary:
-        'Live traffic deltas plus online, per-node and last-online maps. Local polls send traffics/clientTraffics; node polls send nodeTraffics.',
+        'Live traffic deltas plus online, per-node and last-online maps. Local polls send traffics/clientTraffics; node polls send nodeTraffics/nodeClientTraffics.',
       payloadSchema: trafficPayloadSchema,
       example: {
         type: 'traffic',

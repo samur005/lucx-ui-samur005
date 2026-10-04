@@ -306,6 +306,10 @@ export function useClients(options: UseClientsOptions = {}) {
   const settingsReady = defaultsQuery.isFetched;
 
   const [clientSpeed, setClientSpeed] = useState<Record<string, ClientSpeedEntry>>({});
+  // LUCX-HOOK: per-scope speed maps (local Xray poll vs node sync), see applyTrafficEvent
+  const localClientSpeedRef = useRef<Record<string, ClientSpeedEntry>>({});
+  const nodeClientSpeedRef = useRef<Record<string, ClientSpeedEntry>>({});
+  // END LUCX-HOOK
   const summary = listQuery.data?.summary ?? DEFAULT_SUMMARY;
 
   const invalidateAll = useCallback(() => {
@@ -730,29 +734,48 @@ export function useClients(options: UseClientsOptions = {}) {
       const p = payload as {
         onlineClients?: string[];
         clientTraffics?: { email: string; up: number; down: number }[];
+        nodeClientTraffics?: { email: string; up: number; down: number }[];
       };
       if (Array.isArray(p.onlineClients)) {
         queryClient.setQueryData(keys.clients.onlines(), p.onlineClients);
       }
-      if (Array.isArray(p.clientTraffics)) {
-        // Xray reports a row per client whether or not it moved a byte, so most of
-        // this map used to be zeros. A missing entry and a zero entry render
-        // identically (isActiveSpeed treats both as inactive), so the zeros are
-        // dropped and an unchanged result returns the previous object — which lets
-        // React bail out of the update instead of re-rendering the table.
-        const next: Record<string, ClientSpeedEntry> = {};
-        for (const ct of p.clientTraffics) {
+      // Xray reports a row per client whether or not it moved a byte, so most of
+      // this map used to be zeros. A missing entry and a zero entry render
+      // identically (isActiveSpeed treats both as inactive), so the zeros are
+      // dropped and an unchanged result returns the previous object — which lets
+      // React bail out of the update instead of re-rendering the table.
+      const toSpeedMap = (rows: { email: string; up: number; down: number }[]) => {
+        const out: Record<string, ClientSpeedEntry> = {};
+        for (const ct of rows) {
           if (!ct || !ct.email) continue;
           const up = ct.up || 0;
           const down = ct.down || 0;
           if (up === 0 && down === 0) continue;
-          next[ct.email] = {
+          out[ct.email] = {
             up: up / TRAFFIC_POLL_INTERVAL_S,
             down: down / TRAFFIC_POLL_INTERVAL_S,
           };
         }
+        return out;
+      };
+      // LUCX-HOOK: master shows node clients' speed. Local Xray poll sends
+      // clientTraffics, node sync sends nodeClientTraffics; each replaces only its
+      // own scope and the table reads the sum, so the two 5s polls don't clobber
+      // each other.
+      const { clientTraffics: localRows, nodeClientTraffics: nodeRows } = p;
+      if (Array.isArray(localRows)) localClientSpeedRef.current = toSpeedMap(localRows);
+      if (Array.isArray(nodeRows)) nodeClientSpeedRef.current = toSpeedMap(nodeRows);
+      if (Array.isArray(localRows) || Array.isArray(nodeRows)) {
+        const next: Record<string, ClientSpeedEntry> = { ...localClientSpeedRef.current };
+        for (const [email, entry] of Object.entries(nodeClientSpeedRef.current)) {
+          const base = next[email];
+          next[email] = base
+            ? { up: base.up + entry.up, down: base.down + entry.down }
+            : entry;
+        }
         setClientSpeed((prev) => (sameSpeedMap(prev, next) ? prev : next));
       }
+      // END LUCX-HOOK
     },
     [queryClient],
   );

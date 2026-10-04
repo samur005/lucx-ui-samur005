@@ -5427,3 +5427,18 @@ Form: same "via Xray" switch as TrustTunnel + outbound picker.
 Tests: TestTproxyConfigRouteThroughXray, TestInjectTproxyEgress_DokodemoFollowRedirect.
 
 lucxVersion: lucx.205
+
+## Fix: client speed of node-hosted clients on the master (unreleased, after lucx.278)
+
+The Clients page speed column only read `clientTraffics` from the local Xray
+poll, so clients hosted on nodes always showed a dash on the master. The node
+sync job now diffs the summed `node_client_traffics` counters every tick (same
+window normalization as node inbound speed) and broadcasts `nodeClientTraffics`
+in the traffic frame. `useClients` keeps the local and node speed maps apart and
+renders their sum so the two 5s polls do not overwrite each other.
+Files: internal/web/job/node_traffic_sync_job.go (LUCX-HOOK),
+internal/web/job/node_client_speed.go, internal/web/service/inbound_node_client_speed.go,
+frontend/src/hooks/useClients.ts (LUCX-HOOK), frontend/src/pages/api-docs/websocket-events.ts.
+Tests: TestDiffSpeedSamples, TestGetNodeClientTrafficTotalsSumsAcrossNodes.
+
+lucxVersion: lucx.278
