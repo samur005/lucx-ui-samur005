@@ -716,7 +716,19 @@ func (s *ClientService) UpdateInboundClient(inboundSvc *InboundService, data *mo
 			return false, common.NewError("client email is required")
 		}
 		if txErr := runSerializedTx(func(tx *gorm.DB) error {
-			return s.ApplyInboundClientDelta(tx, oldInbound.Id, clients[:1], nil)
+			if err := s.ApplyInboundClientDelta(tx, oldInbound.Id, clients[:1], nil); err != nil {
+				return err
+			}
+			// The settings branch below refreshes client_traffics through
+			// UpdateClientStat; this early return skipped it, so for a client
+			// living only on qWDTT/CSQTT/olcRTC/tproxy inbounds the deadline,
+			// quota and enable flag edited in the panel changed on the client
+			// record but never on the row the subscription header reads
+			// (Subscription-Userinfo expire stayed at the old date).
+			if strings.EqualFold(oldEmail, clients[0].Email) {
+				return inboundSvc.UpdateClientStat(tx, oldEmail, &clients[0])
+			}
+			return nil
 		}); txErr != nil {
 			return false, txErr
 		}

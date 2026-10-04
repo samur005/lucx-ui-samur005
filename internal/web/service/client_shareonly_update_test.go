@@ -3,7 +3,9 @@ package service
 import (
 	"testing"
 
+	"github.com/mhsanaei/3x-ui/v3/internal/database"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
+	"github.com/mhsanaei/3x-ui/v3/internal/xray"
 )
 
 func TestUpdateAfterShareOnlyAttach(t *testing.T) {
@@ -95,5 +97,49 @@ func TestTproxyInboundSaveMustNotSyncEmptyClients(t *testing.T) {
 	got, err := svc.ListForInbound(nil, share.Id)
 	if err != nil || len(got) != 1 || got[0].Email != "fox" {
 		t.Fatalf("attach after tproxy save-guard: %+v %v", got, err)
+	}
+}
+
+// A client that lives only on share-only sidecar inbounds (qWDTT here) must
+// get its client_traffics row refreshed on edit: the subscription header reads
+// expiry/total/enable from that row, so a stale one kept the old deadline
+// after the date was changed in the panel.
+func TestUpdateShareOnlyOnlyClientRefreshesTrafficRow(t *testing.T) {
+	setupBulkDB(t)
+	svc := &ClientService{}
+	inboundSvc := &InboundService{}
+
+	const oldExpiry, newExpiry = int64(1791106064000), int64(1793784464000)
+	source := []model.Client{{Email: "fox", SubID: "sub-fox", Enable: true, ExpiryTime: oldExpiry, TotalGB: 5}}
+	share := mkInbound(t, 56003, model.Qwdtt, `{"remark":"qwdtt"}`)
+	if _, err := svc.Create(inboundSvc, &ClientCreatePayload{
+		Client:     source[0],
+		InboundIds: []int{share.Id},
+	}); err != nil {
+		t.Fatalf("Create on qWDTT: %v", err)
+	}
+	// The expiry job latched the client off at the old deadline.
+	if err := database.GetDB().Model(xray.ClientTraffic{}).
+		Where("email = ?", "fox").Update("enable", false).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	rec := lookupClientRecord(t, "fox")
+	updated := source[0]
+	updated.ExpiryTime = newExpiry
+	updated.TotalGB = 9
+	if _, err := svc.Update(inboundSvc, rec.Id, updated, 0); err != nil {
+		t.Fatalf("Update qWDTT-only: %v", err)
+	}
+	if got := lookupClientRecord(t, "fox").ExpiryTime; got != newExpiry {
+		t.Fatalf("client record expiry = %d, want %d", got, newExpiry)
+	}
+	var ct xray.ClientTraffic
+	if err := database.GetDB().Where("email = ?", "fox").First(&ct).Error; err != nil {
+		t.Fatalf("traffic row: %v", err)
+	}
+	if ct.ExpiryTime != newExpiry || ct.Total != 9 || !ct.Enable {
+		t.Fatalf("traffic row after update expiry=%d total=%d enable=%v, want %d/9/true",
+			ct.ExpiryTime, ct.Total, ct.Enable, newExpiry)
 	}
 }
