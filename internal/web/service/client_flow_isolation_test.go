@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
+	"github.com/mhsanaei/3x-ui/v3/internal/database/dbtest"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 )
 
@@ -25,9 +26,8 @@ func TestClientWithInboundFlow_GatesByInboundCapability(t *testing.T) {
 		{"vless tcp none clears flow", model.VLESS, `{"network":"tcp","security":"none"}`, "", ""},
 		{"vmess tcp tls clears flow", model.VMESS, `{"network":"tcp","security":"tls"}`, "", ""},
 		{"empty stream clears flow", model.VLESS, "", "", ""},
-		// vlessenc (ML-KEM) keeps Vision flow without transport TLS only on XHTTP.
-		// TCP without tls/reality clears it even with vlessenc set.
-		{"vless tcp vlessenc clears flow", model.VLESS, `{"network":"tcp","security":"none"}`, enc, ""},
+		// vlessenc (ML-KEM) carries Vision without transport TLS on any transport.
+		{"vless tcp vlessenc keeps flow", model.VLESS, `{"network":"tcp","security":"none"}`, enc, vision},
 		{"vless xhttp vlessenc keeps flow", model.VLESS, `{"network":"xhttp","security":"none"}`, enc, vision},
 		{"vless xhttp no encryption clears flow", model.VLESS, `{"network":"xhttp","security":"none"}`, `{"encryption":"none"}`, ""},
 		{"vless xhttp empty settings clears flow", model.VLESS, `{"network":"xhttp","security":"none"}`, "", ""},
@@ -47,10 +47,7 @@ func TestClientWithInboundFlow_GatesByInboundCapability(t *testing.T) {
 func TestFlowIsolation_VisionDoesNotLeakToWsInbound(t *testing.T) {
 	dbDir := t.TempDir()
 	t.Setenv("XUI_DB_FOLDER", dbDir)
-	if err := database.InitDB(filepath.Join(dbDir, "x-ui.db")); err != nil {
-		t.Fatalf("InitDB: %v", err)
-	}
-	t.Cleanup(func() { _ = database.CloseDB() })
+	dbtest.InitDB(t, filepath.Join(dbDir, "x-ui.db"))
 
 	db := database.GetDB()
 
@@ -96,10 +93,7 @@ func TestFlowIsolation_VisionDoesNotLeakToWsInbound(t *testing.T) {
 func TestEffectiveFlow_NonFlowInboundSyncedLastDoesNotHideVision(t *testing.T) {
 	dbDir := t.TempDir()
 	t.Setenv("XUI_DB_FOLDER", dbDir)
-	if err := database.InitDB(filepath.Join(dbDir, "x-ui.db")); err != nil {
-		t.Fatalf("InitDB: %v", err)
-	}
-	t.Cleanup(func() { _ = database.CloseDB() })
+	dbtest.InitDB(t, filepath.Join(dbDir, "x-ui.db"))
 
 	db := database.GetDB()
 	reality := &model.Inbound{Tag: "vless-reality", Enable: true, Port: 40001, Protocol: model.VLESS, StreamSettings: `{"network":"tcp","security":"reality"}`}
@@ -146,10 +140,7 @@ func TestEffectiveFlow_NonFlowInboundSyncedLastDoesNotHideVision(t *testing.T) {
 func TestEffectiveFlow_ClearedFlowStaysCleared(t *testing.T) {
 	dbDir := t.TempDir()
 	t.Setenv("XUI_DB_FOLDER", dbDir)
-	if err := database.InitDB(filepath.Join(dbDir, "x-ui.db")); err != nil {
-		t.Fatalf("InitDB: %v", err)
-	}
-	t.Cleanup(func() { _ = database.CloseDB() })
+	dbtest.InitDB(t, filepath.Join(dbDir, "x-ui.db"))
 
 	db := database.GetDB()
 	reality := &model.Inbound{Tag: "vless-reality", Enable: true, Port: 41001, Protocol: model.VLESS, StreamSettings: `{"network":"tcp","security":"reality"}`}
@@ -192,10 +183,7 @@ func TestEffectiveFlow_ClearedFlowStaysCleared(t *testing.T) {
 func TestAttach_PreservesVisionFlowWhenCanonicalColumnZeroed(t *testing.T) {
 	dbDir := t.TempDir()
 	t.Setenv("XUI_DB_FOLDER", dbDir)
-	if err := database.InitDB(filepath.Join(dbDir, "x-ui.db")); err != nil {
-		t.Fatalf("InitDB: %v", err)
-	}
-	t.Cleanup(func() { _ = database.CloseDB() })
+	dbtest.InitDB(t, filepath.Join(dbDir, "x-ui.db"))
 
 	db := database.GetDB()
 
@@ -271,10 +259,7 @@ func TestAttach_PreservesVisionFlowWhenCanonicalColumnZeroed(t *testing.T) {
 func TestEffectiveFlow_AwgOnlyFallsBackToRecordFlow(t *testing.T) {
 	dbDir := t.TempDir()
 	t.Setenv("XUI_DB_FOLDER", dbDir)
-	if err := database.InitDB(filepath.Join(dbDir, "x-ui.db")); err != nil {
-		t.Fatalf("InitDB: %v", err)
-	}
-	t.Cleanup(func() { _ = database.CloseDB() })
+	dbtest.InitDB(t, filepath.Join(dbDir, "x-ui.db"))
 
 	db := database.GetDB()
 	awg := &model.Inbound{Tag: "awg1", Enable: true, Port: 51820, Protocol: model.AWG, Settings: `{"clients":[]}`}
@@ -306,5 +291,37 @@ func TestEffectiveFlow_AwgOnlyFallsBackToRecordFlow(t *testing.T) {
 	}
 	if got != vision {
 		t.Errorf("EffectiveFlow = %q, want %q (AWG-only client reopen)", got, vision)
+	}
+}
+
+// A client detached from its last inbound has no effective flow left to settle
+// its record to, so the record keeps the flow a later attach falls back on.
+func TestRecordFlow_DetachedFromLastInboundKeepsFlow(t *testing.T) {
+	dbDir := t.TempDir()
+	t.Setenv("XUI_DB_FOLDER", dbDir)
+	dbtest.InitDB(t, filepath.Join(dbDir, "x-ui.db"))
+
+	reality := &model.Inbound{Tag: "vless-reality", Enable: true, Port: 43001, Protocol: model.VLESS, StreamSettings: `{"network":"tcp","security":"reality"}`}
+	if err := database.GetDB().Create(reality).Error; err != nil {
+		t.Fatalf("create reality inbound: %v", err)
+	}
+
+	svc := ClientService{}
+	const email = "detached@example.com"
+	const vision = "xtls-rprx-vision"
+	client := model.Client{Email: email, ID: "ce8d33df-3a64-4f10-8f9b-91c3a8e0c333", Enable: true, Flow: vision}
+	if err := svc.SyncInbound(nil, reality.Id, []model.Client{client}); err != nil {
+		t.Fatalf("SyncInbound(attach): %v", err)
+	}
+	if err := svc.SyncInbound(nil, reality.Id, nil); err != nil {
+		t.Fatalf("SyncInbound(detach): %v", err)
+	}
+
+	rec, err := svc.GetRecordByEmail(nil, email)
+	if err != nil {
+		t.Fatalf("GetRecordByEmail: %v", err)
+	}
+	if rec.Flow != vision {
+		t.Errorf("record flow after detaching its last inbound = %q, want %q", rec.Flow, vision)
 	}
 }

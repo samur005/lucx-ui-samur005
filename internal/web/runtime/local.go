@@ -80,6 +80,9 @@ func (l *Local) AddInbound(_ context.Context, ib *model.Inbound) error {
 	if ib.Protocol == model.Csqtt {
 		return l.ensureCsqttInbound(ib)
 	}
+	if ib.Protocol == model.Openflux {
+		return l.ensureOpenfluxInbound(ib)
+	}
 	if ib.Protocol == model.Mieru {
 		return l.ensureMieruInbound(ib)
 	}
@@ -133,7 +136,11 @@ func (l *Local) AddInbound(_ context.Context, ib *model.Inbound) error {
 		if !ok {
 			return nil
 		}
-		return tuic.GetManager().Ensure(inst)
+		err := tuic.GetManager().Ensure(inst)
+		if l.deps.SetNeedRestart != nil {
+			l.deps.SetNeedRestart()
+		}
+		return err
 	}
 	body, err := json.MarshalIndent(ib.GenXrayInboundConfig(), "", "  ")
 	if err != nil {
@@ -170,6 +177,10 @@ func (l *Local) DelInbound(_ context.Context, ib *model.Inbound) error {
 	}
 	if ib.Protocol == model.Csqtt {
 		tunnel.GetManager().Remove(tunnel.CsqttKey)
+		return nil
+	}
+	if ib.Protocol == model.Openflux {
+		tunnel.GetManager().Remove(tunnel.OpenfluxKey(ib.Id))
 		return nil
 	}
 	if ib.Protocol == model.Mieru {
@@ -214,6 +225,9 @@ func (l *Local) DelInbound(_ context.Context, ib *model.Inbound) error {
 	}
 	if ib.Protocol == model.TUIC {
 		tuic.GetManager().Remove(ib.Id)
+		if l.deps.SetNeedRestart != nil {
+			l.deps.SetNeedRestart()
+		}
 		return nil
 	}
 	return l.withAPI(func(api *xray.XrayAPI) error {
@@ -232,9 +246,15 @@ func (l *Local) UpdateInbound(ctx context.Context, oldIb, newIb *model.Inbound) 
 	if oldIb.Protocol == model.Tproxy || newIb.Protocol == model.Tproxy {
 		return l.updateTproxyInbound(ctx, oldIb, newIb)
 	}
-	// LUCX-HOOK: tunnel inbound update (Del+Add / Ensure restart).
+	// LUCX-HOOK: tunnel inbound update. Same-protocol enable goes through Ensure
+	// so an unchanged fingerprint does not SIGTERM the process. Del+Add drops
+	// that fingerprint and restarts on every push — fatal when the panel API is
+	// served by the sidecar (gateway on :443): the master's update POST dies
+	// with EOF and retries every 5s (Gennady, lucx.286).
 	if isTunnelInboundProto(oldIb.Protocol) || isTunnelInboundProto(newIb.Protocol) {
-		_ = l.DelInbound(ctx, oldIb)
+		if tunnelUpdateDropsRunning(oldIb.Protocol, newIb.Protocol, newIb.Enable) {
+			_ = l.DelInbound(ctx, oldIb)
+		}
 		if !newIb.Enable || !isTunnelInboundProto(newIb.Protocol) {
 			if !isTunnelInboundProto(newIb.Protocol) && newIb.Enable {
 				return l.AddInbound(ctx, newIb)
@@ -258,7 +278,17 @@ func (l *Local) UpdateInbound(ctx context.Context, oldIb, newIb *model.Inbound) 
 }
 
 func isTunnelInboundProto(p model.Protocol) bool {
-	return p == model.Naive || p == model.Olcrtc || p == model.Qwdtt || p == model.Csqtt || p == model.Mieru || p == model.TrustTunnel || p == model.Anytls || p == model.Tproxy || p == model.Cover || p == model.Gateway
+	return p == model.Naive || p == model.Olcrtc || p == model.Qwdtt || p == model.Csqtt || p == model.Openflux || p == model.Mieru || p == model.TrustTunnel || p == model.Anytls || p == model.Tproxy || p == model.Cover || p == model.Gateway
+}
+
+// tunnelUpdateDropsRunning reports whether an update must stop the old sidecar
+// before Ensure. Same protocol staying enabled keeps the process so an
+// unchanged config is a no-op.
+func tunnelUpdateDropsRunning(oldProto, newProto model.Protocol, newEnable bool) bool {
+	if !isTunnelInboundProto(oldProto) {
+		return true
+	}
+	return oldProto != newProto || !newEnable || !isTunnelInboundProto(newProto)
 }
 
 // ensureNaiveInbound builds and Ensures a Naive sidecar instance. Panel secret
@@ -296,6 +326,14 @@ func (l *Local) ensureQwdttInbound(ib *model.Inbound) error {
 
 func (l *Local) ensureCsqttInbound(ib *model.Inbound) error {
 	inst, ok := tunnel.CsqttInstanceFromInbound(ib)
+	if !ok {
+		return nil
+	}
+	return tunnel.GetManager().Ensure(inst)
+}
+
+func (l *Local) ensureOpenfluxInbound(ib *model.Inbound) error {
+	inst, ok := tunnel.OpenfluxInstanceFromInbound(ib)
 	if !ok {
 		return nil
 	}
@@ -556,6 +594,9 @@ func (l *Local) updateAmneziaWGInbound(ctx context.Context, oldIb, newIb *model.
 func (l *Local) updateTuicInbound(ctx context.Context, oldIb, newIb *model.Inbound) error {
 	if oldIb.Protocol == model.TUIC && newIb.Protocol != model.TUIC {
 		tuic.GetManager().Remove(oldIb.Id)
+		if l.deps.SetNeedRestart != nil {
+			l.deps.SetNeedRestart()
+		}
 		if !newIb.Enable {
 			return nil
 		}
@@ -563,10 +604,24 @@ func (l *Local) updateTuicInbound(ctx context.Context, oldIb, newIb *model.Inbou
 	}
 	if oldIb.Protocol != model.TUIC {
 		_ = l.DelInbound(ctx, oldIb)
+		if l.deps.SetNeedRestart != nil {
+			l.deps.SetNeedRestart()
+		}
+	}
+	if oldIb.Protocol == model.TUIC && newIb.Protocol == model.TUIC && oldIb.Enable && newIb.Enable && oldIb.Tag != newIb.Tag && l.deps.SetNeedRestart != nil {
+		l.deps.SetNeedRestart()
 	}
 	if !newIb.Enable {
 		tuic.GetManager().Remove(newIb.Id)
+		if oldIb.Enable && l.deps.SetNeedRestart != nil {
+			l.deps.SetNeedRestart()
+		}
 		return nil
+	}
+	if !oldIb.Enable && newIb.Enable {
+		if l.deps.SetNeedRestart != nil {
+			l.deps.SetNeedRestart()
+		}
 	}
 	inst, ok := tuic.InstanceFromInbound(newIb)
 	if !ok {

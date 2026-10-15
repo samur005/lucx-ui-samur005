@@ -4,6 +4,71 @@ Extracted from AGENTS.md. This file is project law.
 
 ---
 
+### Pattern 1ay: acme.sh `tcp port 80 is already used` with Cover on — FIXED (lucx.298)
+
+- **Symptom:** `x-ui` SSL issue or acme.sh cron renew fails with `tcp port 80 is already used by caddy-naive-lin`, or a cert issued before Cover was enabled stops renewing.
+- **Cause:** the LucX Caddy owns :80, and acme.sh standalone wanted :80 itself.
+- **Fix:** acme.sh listens on `127.0.0.1:<port>` (`/etc/x-ui/acme-http-port`, default 29380). Caddy :80 relays `/.well-known/acme-challenge/*` there. With :80 free, the `bin/lucx-acme.sh` pre-hook runs a temporary socat :80 -> port, and the post-hook stops it.
+- **Check:** `bash /usr/local/x-ui/bin/lucx-acme.sh port`; `grep -E 'HTTPPort|LocalAddress|PreHook|PostHook' ~/.acme.sh/<domain>*/<domain>.conf`; `grep -A1 acme-challenge /usr/local/x-ui/bin/tunnel/*.caddyfile`; `curl -i http://<domain>/.well-known/acme-challenge/x` gives 502 while Cover is up (relay alive, acme.sh idle), not 301.
+- **Not this:** a foreign :80 owner (nginx/apache) — the prompt and pre-hook name it and stop. Masking on: nothing listens on :80, so check UFW for TCP 80.
+- Renumbered from 1aw in PR #134: main already had 1aw (lucx.296). Since lucx.298 the dashboard shows the module version (`/sys/module/amneziawg/version`), not the marker SHA — see progress lucx.298.
+
+### Pattern 1ax: masking on but `ufw status` shows every port allow — FIXED (lucx.297)
+
+- **Symptom (Malderin, 14.10.2026, lucx.295):** after applying masking (hide panel), `ufw status` lists all inbound ports and the panel port as ALLOW; Revert→Apply does not change it.
+- **Cause:** the UFW allow/close lists were built from "selected" rows only. Inbound protocols hidden **inside the site** (`req.Inside`) and **hideNaive** rows are not in `selected`, so their public ports stayed (and were re-added by) GatewayUFWAllow, and GatewayUFWClose skipped them. Deterministic, so re-apply reproduces it. The delete syntax `ufw --force delete allow <port>/<proto>` is valid — canonical ufw 0.36.2 strips `--force` before command parsing (checked upstream parser source).
+- **Fix:** GatewayUFWAllow/GatewayUFWClose take a `moved` set (selected maskables + inside + hideNaive), mirror of the snapshot loop's move condition in GatewayApply. Hidden panel/sub close rules now include the `/udp` half. lucx.299: ApplyUFW also sweeps `ufw show added` and deletes every remaining incoming-allow rule whose target port is closed — a manual bare `ufw allow <port>` is one proto-less entry (the `port/tcp`+`port/udp` deletes report it non-existent), full-syntax rules (`from … to any port X`) never match simple deletes. Ranges (`p1:p2`), outbound rules, app profiles stay.
+- **Correct end state:** SSH (+custom sshd port), 80, 443 (the mask facade), panel/sub only when not hidden, and ports of inbounds NOT masked. 443 stays open by design when the gateway itself is the facade.
+- **If something still leaks:** `ufw show added` prints exact rules; since lucx.299 single-port rules in any syntax are swept on Apply. Left alone: port ranges containing the port, and foreign firewalls (firewalld/shorewall).
+- **Healing:** update, restart, revert then apply masking again.
+
+### Pattern 1aw: sidecar traffic counted twice when routeThroughXray is on — FIXED (lucx.296)
+
+- **Symptom:** panel inbound totals grow far faster than real usage (2 TB class over time) on tunnel-sidecar inbounds. AWG itself is NOT affected — `awg_job.go` already skips the kernel rollup for routed inbounds (Xray meters the TUN with the same tag).
+- **Cause:** `collectAnytlsTraffic` / `collectOlcrtcTraffic` / `collectQwdttTraffic` / `collectTproxyTraffic` committed inbound rollups for routed inbounds too. The Xray bridge injected by `injectSocksEgress` / `injectQwdttEgress` carries the same tag, so every bridged byte was added twice. qWDTT defaults `routeThroughXray: true` (qwdtt.go DefaultQwdttConfig), so it doubled out of the box.
+- **Fix:** routedTags guard in all four collectors; `commitSidecarScrape` takes a routedTags map, mirroring the naive/mieru pattern. Per-client rows (TrustTunnelSoleClient) are kept: the bridge cannot attribute to users.
+- **Known limit:** non-routed olcrtc/tproxy still meter from `/proc/<pid>/io` (rchar/wchar — every read+write syscall, ~2x network bytes + log I/O). See the shortcut comment in sidecar_stats.go.
+- **Distinguishing a counting bug from a real loop:** compare the panel with `awg show <iface> transfer` (kernel truth), then with `/proc/net/dev` / vnstat deltas: panel ≫ NIC = accounting bug; NIC ≈ panel on an idle tunnel = real loop (check `ip -s link show awgN` twice, 60 s apart).
+
+### Pattern 1av: mtproxy `Operation not permitted` / masking locks the panel out — FIXED (lucx.293)
+
+- **Symptom (Malderin, 14.10.2026):** after the v3.10 update, `tunnel: mtproxy-N process exited: exit status 1`, then `change_user_group: failed to clear supplementary groups list: Operation not permitted`, `fatal: cannot change user to lucx-mtproxy`, and `mtfront_pre_init: Assertion parent_pid == real_parent_pid failed`. WEB proxy and MTProto on that inbound stay down. Separately, disabling masking with UFW on makes the panel unreachable until `ufw disable` from SSH. After UFW is turned back on, `ufw status` still shows every inbound port and the panel port as ALLOW while the masking page says hide is on.
+- **Cause:** `CapabilityBoundingSet` had no `CAP_SETUID`/`CAP_SETGID`, so the engine's `setgroups()` got EPERM and the parent exited; the worker's `getppid()` was no longer the parent. `ProtectSystem=full` left `/etc/ufw` read-only, so panel `ufw` writes failed. Revert did nothing when UFW was already active, and Apply never deleted old allow rules.
+- **Fix:** bounding set gains `CAP_SETUID` `CAP_SETGID`. `/etc/ufw` is writable. Apply deletes hidden-port allows. Revert re-allows panel, sub, and moved ports when UFW stays on.
+- **Healing:** update and restart. Re-apply masking if the firewall list should match the page. SSH in and `ufw allow <panel-port>/tcp` if a host is locked out before the update.
+- **Not this:** `database is locked` on the client-ip / traffic jobs. That is SQLite busy past the 10s timeout, a different host, and not this sandbox hole.
+
+### Pattern 1au: journal full of `dial tcp 127.0.0.1:1: connection refused` — FIXED (lucx.290)
+
+- **Symptom:** `journalctl -u x-ui` is almost only `tunnel: gateway-N | … layer4 … handling connection … dial tcp 127.0.0.1:1: connect: connection refused`. Remotes are scanners, not panel users. Disk growth is journald, not Naive `access.json` (capped at 32MB).
+- **Cause:** unmatched SNI hit a catch-all `proxy 127.0.0.1:1`. Nothing listens there, so caddy-l4 logs every dial, and the sidecar log writer copies each line to the panel log.
+- **Fix:** omit that catch-all. caddy-l4 closes the conn with no error. A real fallback (cover / `l4http`) stays.
+- **Healing:** update. One gateway restart on the next reconcile. `matching connection … EOF` lines can remain: the client hung up before SNI, and caddy logs that itself.
+- **Not this:** a matched SNI whose backend is down. That dials the real loopback port, not `:1`.
+
+### Pattern 1at: gateway SIGTERM every ~5s, master `update/3` EOF — FIXED (lucx.286)
+
+- **Symptom (Gennady, 05.10.2026):** on the exit node `gateway-N` gets SIGTERM every ~5s, then `stopped` and immediately `started`. No `config changed, restarting`. Caddyfile md5 is stable. Master logs `reconcile inbound "n2-…": POST …/inbounds/update/N: EOF` on the same period. `l4http: no http listener "cover-N"` is only during that shutdown, from the master's IP.
+- **Cause:** node-sync pushes the gateway inbound every 5s. `Local.UpdateInbound` did Del+Add for every tunnel proto, so each push SIGTERM'd caddy. The panel API is behind that caddy on :443, so the POST died with EOF, `pushedFP` was never stored, and the master retried forever.
+- **Fix:** same-protocol enable goes through Ensure. Unchanged fingerprint does not restart. A real config change may EOF once; the next tick matches and sticks.
+- **Healing:** update both panels. The loop stops on the first successful push. No inbound save required.
+- **Not this:** Pattern 1ar (grace timeout, has `config changed` or a one-shot kill). Pattern 1as (`record not found`, not EOF).
+
+### Pattern 1as: node `update/<id>` "record not found" retry loop — FIXED (lucx.283)
+
+- **Symptom (Gennady, 05.10.2026):** after deleting and recreating a node-side cover site, the master logs `POST /panel/api/inbounds/update/3 ... record not found` on every 5 s node-sync tick.
+- **Cause:** `Remote.remoteIDByTag` cached the node-side tag→id; a row recreated on the node got a new id and the stale cache was served without a refetch. The failed push kept the node dirty → retry each tick, forever.
+- **Fix:** `postUpdate` drops the stale cache entry on "record not found" and retries once with a refetched id; a tag gone entirely falls back to create.
+- **Healing:** none needed — a master on lucx.283+ self-heals on the first reconcile tick.
+
+### Pattern 1ar: gateway SIGTERM timeout while masking is on — FIXED (lucx.282)
+
+- **Symptom (Gennady, 05.10.2026):** `tunnel: gateway-N did not stop after SIGTERM, killing process group` while masking is on. Gone when masking is off. Caddy logs `exiting; byeee` on SIGTERM and stays up. Also `$HOME` empty and `l4http: no http listener "cover-N"`.
+- **Cause:** Caddy HTTP shutdown waits forever when `grace_period` is unset. Masking keeps connections on :443, so the 5s stop always times out. A route can still name `cover-N` after that site block failed to render.
+- **Fix:** `grace_period 1s` in generated Caddyfiles. Drop `l4http` routes whose site did not render. Set `HOME` when systemd left it empty.
+- **Healing:** update, then save masking (or wait one reconcile) so the Caddyfile is rewritten. One warning on the old process is normal; it must not repeat.
+- **If `config changed, restarting` repeats every ~10s:** the gateway fingerprint is still moving. Diff `/usr/local/x-ui/bin/tunnel/gateway-N.caddyfile` across two ticks before changing anything else.
+
 ### Pattern 1aq: CSQTT connects, no traffic — Xray bridge incomplete — FIXED (lucx.277)
 
 - **Symptom (VladufQa, 01.10.2026):** CSQTT connects, traffic does not flow.

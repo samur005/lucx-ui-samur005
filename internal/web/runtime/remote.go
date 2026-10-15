@@ -237,6 +237,7 @@ func (r *Remote) do(ctx context.Context, method, path string, body any) (*envelo
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set(wirecodec.MasterPushHeader, "1")
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
@@ -359,6 +360,15 @@ func (r *Remote) cacheDel(tag string) {
 	delete(r.pushedFP, tag)
 }
 
+// forgetTag drops every tag form cacheGetTag would match, once the node reports
+// none of them, so the next resolve re-reads the node instead of a deleted id.
+func (r *Remote) forgetTag(tag string) {
+	prefix := nodeInboundTagPrefix(r.node.Id)
+	bare := strings.TrimPrefix(tag, prefix)
+	r.cacheDel(bare)
+	r.cacheDel(prefix + bare)
+}
+
 func (r *Remote) ListRemoteTags(ctx context.Context) ([]string, error) {
 	if err := r.refreshRemoteIDs(ctx); err != nil {
 		return nil, err
@@ -459,7 +469,8 @@ func (r *Remote) UpdateInbound(ctx context.Context, oldIb, newIb *model.Inbound)
 		return r.AddInbound(ctx, newIb)
 	}
 	payload := wireInbound(newIb, r.node.Id)
-	if _, err := r.do(ctx, http.MethodPost, "panel/api/inbounds/update/"+strconv.Itoa(id), payload); err != nil {
+	id, err = r.postUpdate(ctx, id, oldIb.Tag, newIb, payload)
+	if err != nil {
 		return err
 	}
 	if oldIb.Tag != newIb.Tag {
@@ -468,6 +479,31 @@ func (r *Remote) UpdateInbound(ctx context.Context, oldIb, newIb *model.Inbound)
 	r.cacheSet(newIb.Tag, id)
 	r.recordPushedInbound(newIb)
 	return nil
+}
+
+// postUpdate POSTs one inbound update. A "record not found" answer means the
+// cached id is stale — the row was deleted and recreated on the node, so the
+// tag now maps to a different id. The stale cache entry is dropped and a
+// fresh id resolves once; a tag that is gone entirely falls back to create.
+func (r *Remote) postUpdate(ctx context.Context, id int, tag string, newIb *model.Inbound, payload url.Values) (int, error) {
+	if _, err := r.do(ctx, http.MethodPost, "panel/api/inbounds/update/"+strconv.Itoa(id), payload); err == nil {
+		return id, nil
+	} else {
+		var apiErr *remoteAPIError
+		if !errors.As(err, &apiErr) || !strings.Contains(apiErr.msg, "record not found") {
+			return 0, err
+		}
+	}
+	logger.Infof("remote update: node %s has no inbound %q by id %d — refetching", r.node.Name, tag, id)
+	r.cacheDel(tag)
+	next, err := r.resolveRemoteID(ctx, tag)
+	if err != nil {
+		return 0, r.AddInbound(ctx, newIb)
+	}
+	if _, err := r.do(ctx, http.MethodPost, "panel/api/inbounds/update/"+strconv.Itoa(next), payload); err != nil {
+		return 0, err
+	}
+	return next, nil
 }
 
 func (r *Remote) SetInboundSubSortIndex(ctx context.Context, ib *model.Inbound, index int) error {
@@ -494,6 +530,8 @@ func (r *Remote) ReconcileInbound(ctx context.Context, ib *model.Inbound, exists
 		if ok && prev == fp {
 			return false, nil
 		}
+	} else {
+		r.forgetTag(ib.Tag)
 	}
 	if err := r.UpdateInbound(ctx, ib, ib); err != nil {
 		return false, err
@@ -514,6 +552,17 @@ func (r *Remote) recordPushedInbound(ib *model.Inbound) {
 // adopts a node's settings serialization.
 func (r *Remote) RecordAdoptedInbound(ib *model.Inbound) {
 	r.recordPushedInbound(ib)
+}
+
+// ForgetPushedInbound drops the reconcile-skip fingerprint once the node is seen
+// without the payload it stamped, so the next reconcile re-sends the inbound.
+func (r *Remote) ForgetPushedInbound(tag string) {
+	prefix := nodeInboundTagPrefix(r.node.Id)
+	bare := strings.TrimPrefix(tag, prefix)
+	r.mu.Lock()
+	delete(r.pushedFP, bare)
+	delete(r.pushedFP, prefix+bare)
+	r.mu.Unlock()
 }
 
 // AdoptInboundAlias records a deployed alias without mutating either panel.
@@ -701,13 +750,23 @@ func (r *Remote) ResetClientTraffic(ctx context.Context, _ *model.Inbound, email
 	return err
 }
 
+// ResetClientTraffics zeroes many clients on the node in one request.
+func (r *Remote) ResetClientTraffics(ctx context.Context, emails []string) error {
+	_, err := r.do(ctx, http.MethodPost, "panel/api/clients/bulkResetTraffic", map[string]any{"emails": emails})
+	return err
+}
+
 func (r *Remote) ResetAllTraffics(ctx context.Context) error {
 	_, err := r.do(ctx, http.MethodPost, "panel/api/inbounds/resetAllTraffics", nil)
 	return err
 }
 
 func (r *Remote) ResetInboundTraffic(ctx context.Context, ib *model.Inbound) error {
-	_, err := r.do(ctx, http.MethodPost, fmt.Sprintf("panel/api/inbounds/%d/resetTraffic", ib.Id), nil)
+	id, err := r.resolveRemoteID(ctx, ib.Tag)
+	if err != nil {
+		return fmt.Errorf("remote ResetInboundTraffic: resolve tag %q: %w", ib.Tag, err)
+	}
+	_, err = r.do(ctx, http.MethodPost, fmt.Sprintf("panel/api/inbounds/%d/resetTraffic", id), nil)
 	return err
 }
 
@@ -810,6 +869,7 @@ func wireInbound(ib *model.Inbound, remoteNodeID int) url.Values {
 	v.Set("total", strconv.FormatInt(ib.Total, 10))
 	v.Set("remark", ib.Remark)
 	v.Set("subSortIndex", strconv.Itoa(ib.SubSortIndex))
+	v.Set("excludeFromSub", strconv.FormatBool(ib.ExcludeFromSub))
 	v.Set("enable", strconv.FormatBool(ib.Enable))
 	v.Set("expiryTime", strconv.FormatInt(ib.ExpiryTime, 10))
 	v.Set("listen", ib.Listen)

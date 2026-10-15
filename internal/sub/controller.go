@@ -63,6 +63,7 @@ type SUBController struct {
 	subHideSettings     bool
 	happConfig          HappConfig
 	subRoutingSource    string // LUCX-HOOK: RoscomVPN Happ profile source
+	incyConfig          IncyConfig
 
 	subIncyEnableRouting bool
 	subIncyRoutingRules  string
@@ -131,6 +132,7 @@ type subControllerConfig struct {
 	subRoutingSource string // LUCX-HOOK
 	subHideSettings  bool
 	happConfig       HappConfig
+	incyConfig       IncyConfig
 
 	subIncyEnableRouting bool
 	subIncyRoutingRules  string
@@ -284,6 +286,10 @@ func WithSUBHappConfig(value HappConfig) SUBControllerOption {
 	return func(config *subControllerConfig) { config.happConfig = value }
 }
 
+func WithSUBIncyConfig(value IncyConfig) SUBControllerOption {
+	return func(config *subControllerConfig) { config.incyConfig = value }
+}
+
 func defaultSUBControllerConfig() subControllerConfig {
 	return subControllerConfig{
 		subPath:        "/sub/",
@@ -320,6 +326,7 @@ func NewSUBController(g *gin.RouterGroup, options ...SUBControllerOption) *SUBCo
 		subHideSettings:     config.subHideSettings,
 		happConfig:          config.happConfig,
 		subRoutingSource:    config.subRoutingSource,
+		incyConfig:          config.incyConfig,
 
 		subIncyEnableRouting: config.subIncyEnableRouting,
 		subIncyRoutingRules:  config.subIncyRoutingRules,
@@ -553,11 +560,15 @@ func (a *SUBController) subs(c *gin.Context) {
 		metadata := a.metadataForSubRequest(func() *SubService { return subReq }, subId, builtinProfileURL(c, scheme, hostWithPort))
 		a.ApplyCommonHeaders(c, header, a.updateInterval, metadata.Title, metadata.SupportURL, metadata.ProfileURL, metadata.Announce, a.subEnableRouting, a.subRoutingRules, a.subHideSettings)
 
-		if a.subIncyEnableRouting && a.subIncyRoutingRules != "" {
+		// Incy's profile rides the raw body; other clients must not see that line (#6062).
+		if IsIncyClient(userAgent) && a.subIncyEnableRouting && a.subIncyRoutingRules != "" {
 			incyRules, _, err := resolveIncyRoutingSource(a.subIncyRoutingRules)
 			if err == nil && strings.TrimSpace(incyRules) != "" {
 				result.WriteString(incyRules)
 				result.WriteString("\n")
+				// INCY ranks a Routing header above a body line, so the shared
+				// profile must not override INCY's own one here.
+				c.Writer.Header().Del("Routing")
 			}
 		}
 
@@ -1053,6 +1064,12 @@ func (a *SUBController) ApplyCommonHeaders(
 		c.Writer.Header().Set("Announce", "base64:"+base64.StdEncoding.EncodeToString([]byte(profileAnnounce)))
 	}
 
+	// The Happ tab is Happ-only, so INCY reads it as blank and gets the shared
+	// JSON profile instead; INCY takes a routing link of any scheme (#6062).
+	incyClient := c.Request != nil && IsIncyClient(c.GetHeader("User-Agent"))
+	if incyClient {
+		profileEnableRouting, profileRoutingRules = false, ""
+	}
 	happManaged := a.happConfig.AutoDetect && c.Request != nil && IsHappClient(c.GetHeader("User-Agent"))
 	if profileEnableRouting {
 		c.Writer.Header().Set("Routing-Enable", "true")
@@ -1083,4 +1100,5 @@ func (a *SUBController) ApplyCommonHeaders(
 	}
 
 	ApplyHappHeaders(c, a.happConfig, happManaged)
+	ApplyIncyHeaders(c, a.incyConfig, a.incyConfig.AutoDetect && incyClient)
 }

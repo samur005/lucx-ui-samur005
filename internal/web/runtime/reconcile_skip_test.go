@@ -2,9 +2,12 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -17,7 +20,8 @@ import (
 func TestReconcileInbound_SkipsUnchanged(t *testing.T) {
 	var pushes atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/panel/api/inbounds/update/") {
+		if r.Method == http.MethodPost && (strings.Contains(r.URL.Path, "/panel/api/inbounds/update/") ||
+			strings.Contains(r.URL.Path, "/panel/api/inbounds/add")) {
 			pushes.Add(1)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -283,7 +287,7 @@ func TestDelInboundDropsReconcileFingerprint(t *testing.T) {
 	ib := &model.Inbound{Tag: "in-del", Protocol: model.VLESS, Port: 443, Settings: `{"clients":[]}`}
 	r.cacheSet(ib.Tag, 7)
 
-	if pushed, err := r.ReconcileInbound(context.Background(), ib, false); err != nil || !pushed {
+	if pushed, err := r.ReconcileInbound(context.Background(), ib, true); err != nil || !pushed {
 		t.Fatalf("initial reconcile: pushed=%v err=%v, want push", pushed, err)
 	}
 	if err := r.DelInbound(context.Background(), ib); err != nil {
@@ -315,5 +319,102 @@ func TestUpdateInboundFallbackAddSeedsReconcileFingerprint(t *testing.T) {
 	}
 	if got := counts.inboundUpdates.Load(); got != 0 {
 		t.Fatalf("reconcile sent %d full inbound updates, want 0", got)
+	}
+}
+
+// TestUpdateInboundStaleIDRetriesFreshID: a "record not found" answer to the
+// update means the cached tag→id is stale (the row was deleted and recreated
+// on the node, e.g. sidecar inbound recreated by hand). The retry must use a
+// refetched id, not re-PingPONG the dead one every reconcile tick.
+func TestUpdateInboundStaleIDRetriesFreshID(t *testing.T) {
+	var mu sync.Mutex
+	list := map[string]int{"in-stale": 9}
+	updatesBy := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(r.URL.Path, "/panel/api/inbounds/list"):
+			mu.Lock()
+			rows := make([]map[string]any, 0, len(list))
+			for tag, id := range list {
+				rows = append(rows, map[string]any{"id": id, "tag": tag})
+			}
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "obj": rows})
+		case strings.Contains(r.URL.Path, "/panel/api/inbounds/update/"):
+			mu.Lock()
+			updatesBy[strings.TrimPrefix(r.URL.Path, "/panel/api/inbounds/update/")]++
+			mu.Unlock()
+			if strings.HasSuffix(r.URL.Path, "/update/3") {
+				_, _ = w.Write([]byte(`{"success":false,"msg":"Something went wrong (record not found)"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"success":true}`))
+		default:
+			_, _ = w.Write([]byte(`{"success":true}`))
+		}
+	}))
+	defer srv.Close()
+
+	r := NewRemote(nodeForPlainServer(t, srv, "verify", "tok"), nil)
+	ib := &model.Inbound{Tag: "in-stale", Protocol: model.VLESS, Port: 443, Settings: `{"clients":[]}`}
+	r.cacheSet(ib.Tag, 3)
+
+	if err := r.UpdateInbound(context.Background(), ib, ib); err != nil {
+		t.Fatalf("UpdateInbound with stale id: %v", err)
+	}
+	mu.Lock()
+	got := append([]string(nil), keys(updatesBy)...)
+	mu.Unlock()
+	sort.Strings(got)
+	if len(got) != 2 || got[0] != "3" || got[1] != "9" {
+		t.Fatalf("updates hit %v, want stale 3 then fresh 9", got)
+	}
+	r.mu.RLock()
+	_, ok := r.remoteIDByTag["in-stale"]
+	r.mu.RUnlock()
+	if !ok {
+		t.Fatal("cache must hold the refreshed id after retry")
+	}
+}
+
+func keys(m map[string]int) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+// An inbound deleted on the node must be re-created by the next reconcile; a
+// cached tag→id from before the delete used to send update/<gone id> forever.
+func TestReconcileInbound_RecreatesInboundTheNodeLost(t *testing.T) {
+	var adds, staleUpdates atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(r.URL.Path, "/panel/api/inbounds/list"):
+			_, _ = w.Write([]byte(`{"success":true,"obj":[]}`))
+		case strings.Contains(r.URL.Path, "/panel/api/inbounds/update/"):
+			staleUpdates.Add(1)
+			_, _ = w.Write([]byte(`{"success":false,"msg":"record not found"}`))
+		case strings.Contains(r.URL.Path, "/panel/api/inbounds/add"):
+			adds.Add(1)
+			_, _ = w.Write([]byte(`{"success":true,"obj":{"id":9,"tag":"in-1"}}`))
+		default:
+			_, _ = w.Write([]byte(`{"success":true}`))
+		}
+	}))
+	defer srv.Close()
+
+	r := NewRemote(nodeForPlainServer(t, srv, "verify", "tok"), nil)
+	ib := &model.Inbound{Tag: "n1-in-1", Protocol: model.VLESS, Port: 443, Settings: `{"clients":[]}`}
+	r.cacheSet("in-1", 7)
+
+	if pushed, err := r.ReconcileInbound(context.Background(), ib, false); err != nil || !pushed {
+		t.Fatalf("reconcile of a lost inbound: pushed=%v err=%v, want a re-create", pushed, err)
+	}
+	if staleUpdates.Load() != 0 || adds.Load() != 1 {
+		t.Fatalf("updates to the stale id=%d adds=%d, want 0 and 1", staleUpdates.Load(), adds.Load())
 	}
 }

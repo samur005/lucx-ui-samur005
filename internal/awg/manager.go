@@ -35,6 +35,9 @@ type managed struct {
 	lastTx   map[string]int64
 	haveLast bool
 	peers    []PeerSpec
+	// peerLANRoutes: LAN prefixes behind clients (issue #126) this manager has
+	// installed with `ip route replace`, for cleanup on removal.
+	peerRoutes []string
 }
 
 // Manager owns the set of running AWG interfaces keyed by inbound id, exactly
@@ -136,6 +139,9 @@ func (m *Manager) ensureLocked(inst Instance) error {
 		return err
 	}
 	proc := newProcess(inst.Ifname, configPathForID(inst.Id), fmt.Sprintf("inbound %d", inst.Id))
+	if err := m.recoverStaleInterface(proc); err != nil {
+		return err
+	}
 	if err := proc.Start(); err != nil {
 		return err
 	}
@@ -151,6 +157,32 @@ func (m *Manager) ensureLocked(inst Instance) error {
 		peers:       inst.Peers,
 	}
 	logger.Infof("awg: started interface %s for inbound %d on port %d", inst.Ifname, inst.Id, inst.Port)
+	return nil
+}
+
+// recoverStaleInterface brings down a live interface that has no manager entry
+// (or whose entry was just dropped after a failed stop): procs are in-memory,
+// the orphan sweep runs once per process, and disable/enable cannot reach this
+// state — without recovery every reconcile tick would fail with "awg interface
+// already up" until a panel restart (Igor, 10.10.2026: a kernel-fallback tick
+// swept the .conf while its awg-quick down failed mid module swap, so the next
+// tick recreated the conf and forever failed to start). Safe to run on every
+// start attempt: the conf at configPath is always ours (writeServerConfig just
+// rewrote it) and a foreign iface holding our inbound's name breaks our inbound
+// anyway (UDP port conflict).
+func (m *Manager) recoverStaleInterface(proc *Process) error {
+	if !proc.IsRunning() {
+		return nil
+	}
+	_ = proc.Stop()
+	if !proc.IsRunning() {
+		logger.Warningf("awg: recovered stale interface %s (brought down)", proc.ifname)
+		return nil
+	}
+	if err := deleteNetdev(proc.ifname); err != nil {
+		return fmt.Errorf("awg interface already up: %s (%w)", proc.ifname, err)
+	}
+	logger.Warningf("awg: recovered stale interface %s (awg-quick down failed, netdev deleted)", proc.ifname)
 	return nil
 }
 
@@ -173,6 +205,7 @@ func (m *Manager) Remove(id int) {
 	cleanupTproxyConfig(configPathForID(id))
 	m.flushPortForwards(id)
 	m.flushP2PRules(id)
+	m.flushPeerRoutesLocked(id)
 	path := configPathForID(id)
 	if _, err := os.Stat(path); err == nil {
 		if berr := backupConfigFile(path); berr != nil {
@@ -204,6 +237,7 @@ func (m *Manager) Reconcile(desired []Instance) {
 			delete(m.procs, id)
 			m.flushPortForwards(id)
 			m.flushP2PRules(id)
+			m.flushPeerRoutesLocked(id)
 			// lucx.67: back up rather than delete (see Remove).
 			path := configPathForID(id)
 			if _, err := os.Stat(path); err == nil {
@@ -239,6 +273,7 @@ func (m *Manager) Reconcile(desired []Instance) {
 		m.ensureNatRules(inst)
 		m.ensureP2PRules(inst)
 		m.ensurePortForwards(inst)
+		m.ensurePeerRoutesLocked(inst)
 	}
 }
 

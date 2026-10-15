@@ -1,5 +1,417 @@
 # LucX-UI — Прогресс
 
+## lucx.299 - upstream v3.10.2 overlay: kernel-AWG is a tunnel again for client sync (2026-10-14)
+
+Follow-up to the v3.10.2 merge (same release): CI went red on four LucX client tests. Upstream's new `syncInboundClients` knows two tunnels — `WireGuard`/`AmneziaWG` — and our kernel-AWG (`model.AWG = "awg"`) was not on the list, so upstream's new `keepLinkOwnedFields` treated an `awg` inbound as non-tunnel: the lower-rank restore wiped the attach mint from the record (inbound settings kept the key, the record — the subscription's key source — went empty, the other inbound's handshake died silently). `TestAttach/BulkAttach_TwoTunnelInboundsShareOneKeypair`, `TestCreateClient_KeylessAttachKeepsIdentityPSK`, `TestSyncInbound_StaleSettingsSnapshotKeepsIdentityPreSharedKey` failed.
+
+Fix (two commits, 49b53624 + 3968270c): `model.AWG` joins `isTunnel` and `clientsOnLowerTunnel`'s protocol list; in the outranked restore a **blank `before` field is not an ownership claim** — a peer field minted on an upper tunnel's attach (identity PSK, fresh AllowedIPs, keypair) survives, a claimed (non-empty) field is restored as before. Upstream's own tests untouched; new table test `TestKeepLinkOwnedFields_BlankBeforeIsNotOwnership`.
+
+Logical-conflict sweep of the whole range (post-merge review, all clean):
+- `release.yml` windows job — go-winres + `3x-ui.exe` rename self-consistent; our release artifacts stay the linux tarballs; winres files merged.
+- mtproto `pendingHandshakesMaxPerIp` — parse → fingerprint → `[defense.pending-handshakes]` render → settings → form + i18n keys are all merged; our 0600 hook intact.
+- node traffic merge tests — upstream's write-count tests appended; our share-only/auto-tag assertions kept.
+- vmess link fm/mKCP/XHTTP-inline (upstream `internal/util/link` + frontend parser) — our `internal/lucx` parsers do not parse vmess links; no overlap.
+- sponsor feed `sponsors/3X/sponsors.json` uses only the `page` slot — compatible with the upstream slot set (`dashboard/page/login`, sidebar dropped); our fork URLs hook restored on their raw.githubusercontent move of panel/sponsor.go.
+- Incy isolation (#6810) over our RoscomVPN routing hook: profile rules are wiped for INCY (falls to the shared JSON profile, upstream intent), a RoscomVPN **source** still rules every client panel-wide — deliberate.
+- i18n dead-key sweep removed 8 upstream keys whose code did not arrive in this range (dev-channel UI, user picker) — same policy as lucx.179.
+
+Gates: local gofumpt/vet/build + unit (no-CGO) green; CI (go-test, race, golangci, codegen, govulncheck, frontend, node-e2e, fuzz-smoke, postgres-durable-first) green on 3968270c.
+
+---
+
+## merge: origin/main v3.10.2 → lucx.299 (2026-10-14)
+
+Upstream sync v3.10.0 → v3.10.2: 14 commits, 56 files. Snapshot: `backup/v3.10.0-lucx.299`. Hook audit: `git grep -c LUCX-HOOK` = 153 files before and after the merge — **zero drops**. LucX base version file reads `3.10.2`.
+
+Merged upstream work: mtg per-IP pending-handshake limit (+ settings i18n, form); whole-crash-report capture and in-place shadowsocks changes in xray; vmess link inline XHTTP/fm/mKCP fields (#6808/#6809); Hysteria2 Gecko obfs into Clash/Mihomo; Incy routing isolation from Happ headers (#6810); node traffic merge writes only changed client rows; syncInboundClients hardening (link-owned fields, lower-tunnel rank, settleRecordFlows); sponsors rework — sidebar slot dropped, simplified Sponsors page, raw.githubusercontent feed; Windows build as 3x-ui.exe with icon/version manifest (winres, go-winres).
+
+Conflicts (16) and resolutions:
+- 13 `internal/web/translation/*.json` — script-merged: ours-base + upstream keys/values on top, upstream-removed sponsor placement keys (`placements`, `placementSidebar*`, `placementDashboard*`, `placementLogin*`, `placementPage*`, `available`, `takenUntil`, `activeCount` — 12, nothing references them anymore) dropped, our `sponsors.intro`/`yourBrandText` (LucX wording, lucx.284) kept. Parity 3289 keys × 13 locales.
+- `internal/sub/controller.go` — upstream Incy isolation in `ApplyCommonHeaders`: their `incyClient` block + `ApplyIncyHeaders(…incyClient)` over our RoscomVPN routing LUCX-HOOK (their duplicate rule-resolution trio dropped — our hook already resolves; INCY with RoscomVPN source still gets source rules, INCY without falls to the shared JSON profile).
+- `internal/web/service/panel/sponsor.go` — ours: fork sponsor URLs LUCX-HOOK over upstream's raw.githubusercontent move.
+- `internal/web/service/xray_wireguard_config_test.go` — ours (`KeepAliveValue` expectations) + upstream's reordering/`AmneziaWG identity` wording.
+
+Post-merge dead-key sweep (per lucx.179 policy): upstream keys `pages.index.{devChannel,devChannelWarning,currentCommit,latestCommit}`, `pages.nodes.updateDevChannel`, `pages.xray.ruleForm.{userPlaceholder,userEmpty,userLoadError}` dropped from all 13 — our PanelUpdateModal/NodesPages stay stable-only and RuleFormModal keeps the lucx client picker; upstream's code using them did not change in this range, so it is not in our tree. i18n-dead-keys green.
+
+Gates on the Windows host: gofumpt clean, `go vet` (all but CGO-locked `internal/database` — pre-existing), `go build` of awg/lucx/mtproto/sub, `go test ./internal/awg/... ./internal/lucx/...` green, `npm run gen` (no delta), typecheck + oxlint + vitest unit (1573/1573) + build green. CGO packages checked by CI after push.
+
+Healing: `x-ui update`. No LucX behavior changed by the sync itself; panel `version` becomes 3.x upstream numbering — the overlay keeps `lucx.299`.
+
+---
+
+## lucx.299 - masking closes manually created allow rules too (2026-10-14)
+
+Malderin follow-up to lucx.297: the panel port stayed open in `ufw status` when the allow rule was created by hand before applying masking ("сбросил файрвол, сразу добавил 2 правила … потом при применении маскинга эти 2 порта не трогаются"). Root cause (verified live on ufw 0.36.2, stand 144.31.224.212): a bare `ufw allow 35347` is stored as **one proto-less rule** — `ufw --force delete allow 35347/tcp` and `…/udp` both report "Could not delete non-existent rule" — and a full-syntax rule (`ufw allow proto tcp from 1.2.3.4 to any port X`) never matches simple spec deletes either. So the canonical close specs only cleared rules in the panel's own shape; anything pasted in another form survived every apply.
+
+Fix: `ApplyUFW` now sweeps `ufw show added` after the per-spec deletes and deletes every remaining **incoming allow** rule whose target port is in the close set (panel/sub hidden, moved inbounds, hidden naive). The `ufw show added` lines minus the `ufw ` prefix are the exact `ufw delete` arguments (verified: bare, `in <port>/tcp`, full-syntax forms all delete). Not touched: `from port … to <any>` source-port matches (last-`port`-token parse wins), port ranges `p1:p2`, outbound rules, application profiles, deny/route rules. Port 22 / sshd spec skips are unchanged.
+
+**lucxVersion:** lucx.299
+
+Files: `internal/config/config.go`, `internal/lucx/tunnel/gateway_ufw.go`, `internal/lucx/tunnel/gateway_ufw_test.go`.
+
+Tests: `TestApplyUFW_ClosesManualRules` (bare + `in` + full-syntax forms deleted, 22/80/443 kept), `TestApplyUFW_SweepLeavesForeignTargetsAlone` (range/out/app-profile/deny/route and foreign target rules stay), `TestUfwLineOpensPort` (7 positive / 10 negative line forms, all captured from the stand), existing `TestApplyUFW_*` green with `ufwShowAdded` stubbed. Live delete semantics on the stand: bare `ufw delete allow 35399` removes the proto-less rule (v4+v6), `ufw delete allow from 1.2.3.4 to any port 35387 proto tcp` removes the full-syntax rule; experiment rules cleaned up. `go test ./internal/lucx/... -count=1` + `go vet` + `gofmt -l` green on the Windows host.
+
+Healing: `x-ui update`; Apply UFW runs only on the next Apply of masking (Revert then Apply with the UFW box on) — no inbound or client config changes.
+
+Manual test plan:
+1. `ufw allow <panel-port>` by hand (bare, while masking is off), note it in `ufw status`.
+2. Panel → masking → apply with hide panel + UFW: `ufw status` must not list `<panel-port>` anymore (in any form: bare, `/tcp`, `/udp`, full syntax).
+3. Revert: the panel/sub/moved ports come back (`ufw status` lists them); the manual bare form returns as `<port>/tcp` (+`/udp`), not the original bare entry — acceptable: the port is open as designed.
+
+Not covered: rules with a port **range** containing the panel port (e.g. `ufw allow 30000:40000/tcp`) are left alone — one close must not delete a range that also opens other ports; a foreign firewall (firewalld/shorewall) is untouched by design (UFW checkbox only).
+
+---
+
+## lucx.298 - ACME HTTP-01 next to a LucX Caddy on :80; AWG version pill again (2026-10-14)
+
+Bundled release: PR #134 (maksimkurb, ACME vs Cover) + the dashboard AWG version pill (below). lucx.295/297-style docs tail of lucx.297 is not duplicated here.
+
+The Cover site (and standalone naive with `useAcme`) binds TCP :80. acme.sh standalone (`x-ui` SSL menu, `install.sh`) then failed with `tcp port 80 is already used`. Cron renewal of a cert issued before Cover was enabled broke silently. The only workaround was disabling the inbound by hand.
+
+acme.sh now always listens on a loopback port, and :80 is forwarded to it:
+- the port is stored in `${XUI_DB_FOLDER:-/etc/x-ui}/acme-http-port`, default 29380. The issue prompt in `x-ui.sh` / `install.sh` asks for it. It explains that LucX forwards :80 automatically and rejects 80 and busy ports. Non-interactive installs take `XUI_ACME_HTTP_PORT` and fall back to the saved port when it is 80;
+- while a LucX Caddy holds :80, its :80 block sends only `/.well-known/acme-challenge/*` to `127.0.0.1:<port>`, matched before the redirect. The panel reads the port file on every render, so changing the port gives one Caddy restart on the next reconcile. Caddy answers its own HTTP-01 tokens first (`caddyhttp/server.go` `HandleHTTPChallenge`), so naive `useAcme` keeps its own cert;
+- while :80 is free, the acme.sh pre-hook starts a temporary socat (TCP4 and TCP6 :80 -> `127.0.0.1:<port>`, killed by the post-hook, `timeout 900` as a backstop);
+- if Caddy still relays to an older port (not reconciled yet, or a cert issued before a port change), the pre-hook bridges that loopback port to the cert's port;
+- a foreign :80 owner (nginx, apache, plain caddy) or a LucX Caddy without the relay (a gateway listening on 80) fails the prompt or the pre-hook with a message that names it.
+
+The saved port never has to match the :80 owner, so a renewal succeeds on its first run and does not print a pre-hook error. acme.sh keeps `--local-address 127.0.0.1 --listen-v4`, so the listener never leaves loopback. The script passes `LUCX_ACME_LISTEN_PORT` on `--issue`, because `Le_HTTPPort` reaches the domain conf only after the pre-hook.
+
+Migration (`lucx-acme.sh migrate`, run by `install.sh`, `update.sh`, the x-ui renew menu and any port change in the prompt) moves standalone certs with no hooks of their own on port 80 to the saved port and our pre/post hooks, and re-points ours after a port change. Webroot/DNS certs, custom ports, and certs with an operator pre/post hook are left alone, as is everything when socat is missing. `x-ui uninstall` runs `lucx-acme.sh restore` first, so the certs renew on plain :80 again. The hooks are guarded with `[ ! -f … ] ||`, so a removed helper never blocks acme.sh. Docker ships the helper in `/app/bin` (`DockerInit.sh`).
+
+**lucxVersion:** lucx.298
+
+Files: `internal/lucx/tunnel/acme.go` (new), `cover.go`, `naive.go`, `acme_test.go` (new), `cover_test.go`; `bin/lucx-acme.sh` (new); `x-ui.sh`, `install.sh`, `update.sh`, `.github/workflows/release.yml`, `bin/sourcecraft-release.sh`, `DockerInit.sh`.
+
+Tests: `TestAcmeHTTPChallengePort_FromFile`, `TestAcmeHTTPChallengePort_SameFileAndDefaultAsShellHelper` (Go and the shell helper read the same `$XUI_DB_FOLDER/acme-http-port`), `TestRenderCoverCaddyfile_AcmeRelayOnHTTP`, `TestRenderCoverCaddyfile_NoAcmeRelayWithoutHTTP`, `TestRenderCaddyfileAcme_RelaysForeignChallenges`, `TestNoAcmeRelayWithoutPort80Site` (naive manual TLS, tproxy, unified gateway). Shell helper with stubbed `ss`/`ip`/`socat`: `TestLucxAcmeHelper_PreHookForwardsFreePort80AndPostHookStopsIt`, `TestLucxAcmeHelper_PreHookWithPort80Owners` (relay, stale relay bridge, env port on first issue, gateway without relay, foreign owner), `TestLucxAcmeHelper_MigrateAndRestore`, `TestLucxAcmeHelper_PromptRejectsPort80AndSavesChoice`, `TestLucxAcmeHelper_PromptRefusesForeignPort80`, `TestLucxAcmeHelper_PromptNonInteractiveIgnoresPort80`. `TestCoverInstanceBehindCoverSkipsOwnCaddy` / `TestCoverTproxyWinsWhenStackReady` now look for the tproxy relay port, since `reverse_proxy 127.0.0.1:` alone matches the ACME relay too. Each test went red with its fix mutated. Real `caddy-naive` v2.11.2: `caddy adapt` accepts both renders with the acme-challenge route ahead of the redirect. A live :80 block with acme.sh's own socat responder returned the token through Caddy and a 301 elsewhere. A live pre-hook bridge (real socat, 31111 -> 31222) returned the token, and the post-hook freed the port. `go vet` + `go test ./internal/lucx/... ./internal/awg/...` green, `bash -n` on all touched scripts, `shellcheck` clean on `bin/lucx-acme.sh`.
+
+Healing: `x-ui update`. The changed Caddyfile gives one Cover / naive Caddy restart on the next reconcile. Inbound and client settings are not rewritten. `update.sh` migrates existing standalone certs, and the next renewal goes through the forwarder.
+
+Manual test plan:
+1. Cover running on :80: `x-ui` -> SSL -> issue a cert for a subdomain pointing at this host. The prompt explains the :80 forward and offers 29380. Entering `80` is refused. Issue succeeds, and `~/.acme.sh/<domain>*/<domain>.conf` has `Le_HTTPPort='29380'`, `Le_LocalAddress='127.0.0.1'`, base64 `Le_PreHook` / `Le_PostHook`. `ss -ltnp | grep 29380` during the issue shows only `127.0.0.1`.
+2. `~/.acme.sh/acme.sh --renew -d <domain> --force` with Cover still up: success, no pre-hook error, no socat on :80.
+3. Disable Cover (:80 free) and repeat step 2: `ss -ltnp | grep ':80 '` shows `socat` during the run and nothing after it. Renewal succeeds.
+4. Re-run the issue prompt and choose `31000`: `/etc/x-ui/acme-http-port` holds 31000, the step-1 conf moves to 31000, the Cover Caddyfile (`bin/tunnel/cover-*.caddyfile`) relays to 31000 after the next reconcile, and a renewal right away still works (bridge 29380 -> 31000).
+
+Not covered: with Masking on, nothing listens on :80 (the cover moves to loopback), so the socat path is used. UFW default-deny may still block :80 from outside. `setup_ssl_certificate` in `install.sh` has no caller and was left alone.
+
+Merge note (release time): the PR predates lucx.296/297, so on merge the docs conflict was renumbered (debug pattern `1aw` → `1ay`) and `acme_test.go` got `//go:build !windows` (`syscall.Kill` did not compile on the Windows dev host; tests unchanged and green on Linux/CI).
+
+### AWG version pill shows the module version again
+
+The dashboard pill next to the Xray version showed a 12-char hash since lucx.~90 (`9cd76abb`): `collectHostStatus` read the pin SHA from `/etc/x-ui/.awg-module-version` — the update.sh rebuild-gate marker, not a displayable version. It now reads the loaded module's baked version from `/sys/module/amneziawg/version` (WIREGUARD_VERSION stamp; on the stand = `3.1.20260812`). Module not loaded → empty string, the pill hides and the `module_not_loaded` state stays the single source of truth. The SHA marker keeps its rebuild-gate role in `update.sh`; `moduleSHA()` deleted as dead code.
+
+Files: `internal/awg/host_status.go`, `platform_linux.go` (+`TestLoadedModuleVersion` moved to `platform_linux_test.go`), `platform_other.go`, `host_status_test.go`. Gates: `go vet` + `go test ./internal/awg/` green on the Windows host and cross-`GOOS=linux` vet, `gofmt` clean. Live check: stand `144.31.224.212` — `cat /sys/module/amneziawg/version` = `3.1.20260812`, marker = full pin SHA.
+
+Healing: `x-ui update`. No inbound/client changes; the panel API field `awg.version` merely changes what it carries.
+
+**Release:** v3.10.0-lucx.298 - https://github.com/AlexeyLCP/lucx-ui/releases/tag/v3.10.0-lucx.298
+
+---
+
+## lucx.297 - masking no longer leaves hidden ports open in UFW (2026-10-14)
+
+Malderin (v3.10.0-lucx.295): applying masking with hide-panel produced `ufw status` listing every port as allow, including the panel port; re-applying changed nothing. Root cause: the UFW allow/close lists knew only the "selected" maskable rows. Protocols hidden **inside the site** (`req.Inside`) and **hidden naive** (`req.HideNaive`) are not in `selected`, so GatewayUFWAllow kept (and re-added on every apply) their public ports, and GatewayUFWClose never closed them. The ufw `--force delete allow <spec>` syntax itself is valid (canonical ufw 0.36 parser strips `--force` before command parsing — checked the upstream source).
+
+Fix: both lists now take a `moved` set — every inbound whose port leaves the public internet: selected maskables, inside-rows, hideNaive — matching the snapshot loop's move condition exactly. When the panel is hidden, close also removes the udp halves of the panel/sub allow rules (a bare `ufw allow <port>` pasted manually leaves a `/udp` tail that still shows in status). `ufwDefaultSelected` renamed to `ufwDefaultMoved`.
+
+**lucxVersion:** lucx.297
+
+Files: `internal/lucx/tunnel/gateway_ufw.go`, `internal/web/service/gateway.go`, `internal/lucx/tunnel/gateway_ufw_test.go`.
+
+Tests: `TestGatewayUFW_MovedRowsVanishFromAllow` (inside/hideNaive/class-skip rows vs allow and close), existing `TestGatewayUFWAllow`, `TestGatewayUFWClose_DropsHiddenKeepsPublic`, `TestGatewayUFWRestore_PanelAndMovedPorts`, `TestGatewayUFW_SSH22StaysTCPOnly`, `TestApplyUFW_*` green; `gofmt -l` clean. Full gates in CI (`internal/database` needs CGO).
+
+Healing: update via `x-ui update`, restart, then masking Revert → Apply again. UFW rules are rewritten in one pass. Still correct to see SSH, 80, 443 (the mask facade) and ports of inbounds NOT masked. Issued client configs are not rewritten.
+
+Note: allow rules added manually as a bare port (`ufw allow 5432`) get their tcp half closed; the udp half is removed by this fix too. If something still shows in `ufw status`, `ufw show added` prints the exact rules.
+
+Verification (test stand 144.31.224.212, dev-latest lucx.297): cover+tproxy on 443, hide panel, UFW on → `ufw status` = exactly `22/tcp, 80/tcp, 443/tcp, 443/udp` (+v6); panel 2053 closed from the outside (TcpTestSucceeded=False); facade 443 open; Revert → UFW inactive again (it was not active before), gateway disabled, snapshot cleared. Fail2ban jails `3x-ipl`/`sshd` on the stand banned the testing IP mid-test and expired — unrelated to the fix.
+
+**Release:** v3.10.0-lucx.297 - https://github.com/AlexeyLCP/lucx-ui/releases/tag/v3.10.0-lucx.297
+
+---
+
+## lucx.296 - no double traffic accounting for routed sidecars (2026-10-14)
+
+Operator report: the panel metered far more traffic than real usage (2 TB class), a sidecar double-count was suspected. Audit of the accounting paths: AWG is clean — kernel `awg show dump` deltas are baseline-corrected and the routed inbound rollup is already skipped in favor of the Xray TUN meter (`awg_job.go` routedTags guard; naive/mieru/trusttunnel have the same guard). Four tunnel collectors lacked the guard, so for `routeThroughXray` inbounds the same bytes were written to the inbound total twice — once by the Xray bridge (SOCKS/TUN inbound carrying the inbound tag), once by the sidecar scraper: anytls, olcrtc, qwdtt, tproxy. (qwdtt defaults `routeThroughXray: true`, so this hit by default.)
+
+**lucxVersion:** lucx.296
+
+Files: `internal/web/job/tunnel_job.go` (routedTags guard in collectAnytlsTraffic / collectOlcrtcTraffic / collectQwdttTraffic / collectTproxyTraffic + new commitSidecarScrape parameter), `internal/lucx/tunnel/sidecar_stats.go` (shortcut comment).
+
+Tests: `go test ./internal/lucx/tunnel/ -count=1` green; `gofmt -l` clean. Full gates run in CI (`internal/database` needs CGO, not available on the Windows host).
+
+Known limit (documented, not fixed): non-routed olcrtc/tproxy meter from `/proc/<pid>/io` (rchar/wchar) — every read+write syscall, so a direct (non-routed) relay still meters roughly 2x its network bytes plus process I/O (logs). Upgrading to per-interface counters is a separate change.
+
+Healing: `x-ui update`, restart. Overcounted totals persist in the DB until a per-client/inbound reset — the fix stops future double-adding only.
+
+E2E note: the test stand runs no sidecar inbounds, so this fix was verified by unit tests only (no routed traffic to observe); the masking/UFW fix shipped in the same release has full stand verification (see lucx.297).
+
+**Release:** v3.10.0-lucx.297 - https://github.com/AlexeyLCP/lucx-ui/releases/tag/v3.10.0-lucx.297
+
+---
+
+## lucx.295 - UFW also writes /etc/default/ufw under the sandbox (2026-10-14)
+
+Malderin: hiding a panel under masking now reaches the UFW step but fails: `Gateway applied, ufw: ERROR: '/etc/default/ufw' is not writable: exit status 1`. lucx.293 whitelisted `/etc/ufw`, but ufw's startup check also wants the sibling file `/etc/default/ufw` writable, and `ProtectSystem=full` keeps it read-only. The debian/arch/rhel units and the install/update drop-in generators add `-/etc/default/ufw` (missing-ok, so ufw-less hosts are unaffected).
+
+**lucxVersion:** lucx.295
+
+Files: `x-ui.service.{debian,arch,rhel}`, `install.sh`, `update.sh`.
+
+Tests: `bash -n` on both scripts; CI lint. No Go code changed.
+
+Healing: `x-ui update`, restart, then Masking Apply again. Issued client configs are not rewritten.
+
+**Release:** `v3.10.0-lucx.295` - https://github.com/AlexeyLCP/lucx-ui/releases/tag/v3.10.0-lucx.295
+
+---
+
+## lucx.294 - UFW masking never touches SSH rules (2026-10-14)
+
+On some hosts `ufw --force delete allow 22/udp` also removes the `22/tcp` rule, and a masked inbound that had lived on port 22 put both specs in the close list - masking deleted SSH out of the firewall. `GatewayUFWAllow` likewise listed a masked inbound's `22/tcp`/`22/udp` next to the real SSH allow. Now: SSH (22 and the custom `sshd_config` port) is skipped in the allow list when it collides, `GatewayUFWClose` and `ApplyUFW` never delete SSH specs, `GatewayUFWRestore` skips reopening 22 (it is always allowed), and every allow goes through `ufwAllowSpec` which drops SSH ports except the single `22/tcp` rule.
+
+**lucxVersion:** lucx.294
+
+Files: `internal/lucx/tunnel/gateway_ufw.go`, `internal/lucx/tunnel/gateway_ufw_test.go`.
+
+Tests: `TestGatewayUFW_SSH22StaysTCPOnly` (close list keeps `22/tcp` for a masked inbound on 22), plus the existing `TestGatewayUFWClose_DropsHiddenKeepsPublic`, `TestGatewayUFWRestore_PanelAndMovedPorts`, `TestApplyUFW_RecordsCommands`, `TestRevertUFW_DisablesOnlyIfWeEnabled`; `go vet ./internal/lucx/... ./internal/awg/...`, `go test ./internal/lucx/... ./internal/awg/...` green.
+
+Healing: `x-ui update`, restart panel, then on the Masking page run Revert and Apply again. UFW rules are rewritten in one pass; SSH keeps its single `22/tcp` rule. Issued client configs are not rewritten.
+
+**Release:** `v3.10.0-lucx.294` - https://github.com/AlexeyLCP/lucx-ui/releases/tag/v3.10.0-lucx.294
+
+---
+
+## lucx.293 — MTProxy and masking UFW under the v3.10 sandbox (2026-10-14)
+
+Malderin, after lucx.292: `mtproxy-41` exits 1 with `change_user_group: failed to clear supplementary groups list: Operation not permitted` and `parent_pid == real_parent_pid`. The v3.10 bounding set has no `CAP_SETGID`/`CAP_SETUID`, and `NoNewPrivileges` blocks the child from gaining them, so `setgroups()` fails and the parent exits before the worker's `getppid()` check. The same sandbox makes `/etc` read-only, so `ufw allow`/`ufw disable` from the panel cannot write `/etc/ufw`. Disabling masking then left default-deny in place and did not put the panel port back when UFW had already been active (`RevertUFW` was a no-op). Apply also only added allows, so existing rules kept every inbound port, including the panel, listed as ALLOW.
+
+The unit and the generated drop-in now include `CAP_SETUID` `CAP_SETGID` and `/etc/ufw`. install/update create `lucx-mtproxy` outside the sandbox (`useradd` from the panel cannot write `/etc/passwd`). Apply deletes allow rules for hidden ports. Revert re-allows the panel, sub, and moved inbound ports when UFW stays on, and still disables UFW only when this panel enabled it.
+
+**lucxVersion:** lucx.293
+
+Files: `x-ui.service.{debian,arch,rhel}`, `install.sh`, `update.sh`, `internal/lucx/tunnel/gateway_ufw.go`, `internal/web/service/gateway.go`, en-US + ru-RU `ufwHint`.
+
+Tests: `TestGatewayUFWClose_DropsHiddenKeepsPublic`, `TestGatewayUFWRestore_PanelAndMovedPorts`, `TestApplyUFW_RecordsCommands`, `TestRevertUFW_DisablesOnlyIfWeEnabled`.
+
+Healing: `x-ui update`, then restart. MTProxy comes back on the next reconcile. A mask that is already on does not rewrite UFW until Revert and Apply again. Issued client configs are not rewritten.
+
+**Release:** shipped inside `v3.10.0-lucx.294` - https://github.com/AlexeyLCP/lucx-ui/releases/tag/v3.10.0-lucx.294 (no separate tag)
+
+---
+
+## lucx.292 — AWG survives the v3.10 systemd sandbox (2026-10-13)
+
+v3.10.0-lucx.291 shipped upstream `ProtectSystem=full` plus `ProtectKernelTunables=yes`. Two effects took down AWG on every updated node. The drop-in `10-xui-sandbox.conf` did not list `/etc/amnezia`, so reconcile could not write `awgN.conf` / `awgo-*.conf` (`read-only file system`) and `awg-quick up` never ran. The same sandbox masks `/proc/kallsyms`, so `ModuleSupportsAwg3` went false and the renderers dropped HeaderProtectionKey plus the six device timers. Peers still had those fields, so the handshake failed. An empty kallsyms trusts `/sys/module/amneziawg/version` only when it is 3.x (n9 reports `3.1.20260812`). The dkms `1.0.0` stamp (lucx.58) is not trusted: then the running kernel's DKMS object is scanned, including Debian's `amneziawg.ko.xz`. `/lib/modules` stays hidden by `ProtectKernelModules`. A readable kallsyms stays authoritative. `install.sh` / `update.sh` and the debian/arch/rhel units add `/etc/amnezia` to `ReadWritePaths`. Update still rewrites only `10-xui-sandbox.conf`; other drop-ins in `x-ui.service.d` are left in place (uninstall still removes the directory).
+
+**lucxVersion:** lucx.292
+
+Files: `internal/awg/platform_linux.go`, `internal/awg/platform_linux_test.go`, `install.sh`, `update.sh`, `x-ui.service.debian`, `x-ui.service.arch`, `x-ui.service.rhel`.
+
+Tests: `TestKallsymsProbe`, `TestKernelExportsHeaderProtection_SandboxFallback`, `TestKernelExportsHeaderProtection_XZModule`. `xz`/`zstd` go through `CommandContext` (`noctx` rejects `exec.Command`).
+
+Healing: `x-ui update` to this release, then restart. The next reconcile rewrites the conf with the 3.x fields and brings the interface up. Issued client configs are not rewritten. A `1.0.0` module whose only object is `.ko.zst` still withholds the fields when `zstd` cannot decompress it.
+
+**Release:** `v3.10.0-lucx.292` — https://github.com/AlexeyLCP/lucx-ui/releases/tag/v3.10.0-lucx.292
+
+---
+
+## lucx.291 — overlay upstream v3.10.0 (2026-10-12)
+
+Fresh `origin/main` (tag v3.10.0). LucX hooks reapplied beside the upstream additions, not a blanket `--ours`. All 1030 `LUCX-HOOK` markers across 150 files are unchanged. Pre-merge snapshot: `backup/v3.9.0-lucx.290`.
+
+Kept: kernel AWG and tunnel sidecars, share-only client apply, inbound QR for single-credential tunnels (upstream removed `QrCodeModal` with single-user Shadowsocks), Happ QR cutoff 2953, release-notes panel update (the confirm dialog closes before the request). Took theirs: MASQUE protocol and transport, XDRIVE (empty share link, no storage secrets in a QR), TUN adapter options, Lua DNS/routing scripts, in-place client updates via `servedOutsideXray` (LucX sidecars stay on the sidecar path), Go 1.27.2 and the xray-core bump. `genAllLinks` still drops other empty URIs (lucx.109) and keeps the one empty XDRIVE entry.
+
+**lucxVersion:** lucx.291
+
+Tests: `CGO_ENABLED=0 go test ./internal/awg/... ./internal/lucx/... ./internal/database/model/`; frontend `tsc --noEmit`; vitest `inbound-link.test.ts` and `panel-update-modal.test.tsx`. `npm run gen` rewrote zod and openapi. Full `go test` of database/service/runtime/sub was not run (no gcc, so sqlite CGO cannot build). CI `govulncheck` then failed to compile: `detachShareOnlyClient` still called `emailsUsedByOtherInbounds` without the new `*gorm.DB`, and the WireGuard peer path still treated `KeepAlive` as `*int`. Both call sites now match the merged types. The next CI run still failed to build `xray_wireguard_config_test.go` (`*int` vs `KeepAliveValue`) and the new static-`message` test (LucX toasts). The test uses `KeepAliveValue`; AWG import, masking, tproxy, cover, and the routing rule form call `message.useMessage()`. The AWG import warning test spies on that hook, not the static API.
+
+**Release:** `v3.10.0-lucx.291` — https://github.com/AlexeyLCP/lucx-ui/releases/tag/v3.10.0-lucx.291
+
+---
+
+## lucx.290 — Gateway drop no longer logs every unmatched connection (2026-10-12)
+
+A public gateway filled the panel journal with `dial tcp 127.0.0.1:1: connect: connection refused`. Unmatched SNI (scanners on :443) was proxied to a closed loopback port, and caddy-l4 logs that dial failure on every hit; `procLogWriter` copies each line into journald. The catch-all is now omitted. caddy-l4 closes the connection when no SNI route matches (`nopHandler`, no error). A configured fallback (cover site or `l4http` chan) is unchanged. Clients with a matching SNI are unchanged. Rule 0 safe.
+
+**lucxVersion:** lucx.290
+
+Files: `internal/lucx/tunnel/gateway.go`, `internal/lucx/tunnel/gateway_test.go`.
+
+Tests: `TestRenderGatewayCaddyfile_SNIAndDrop`, `TestRenderUnifiedGatewayCaddyfile_NoFallbackDrops`.
+
+Healing: update the panel. The next reconcile rewrites the Caddyfile and restarts the gateway once.
+
+**Release:** `v3.9.0-lucx.290` — https://github.com/AlexeyLCP/lucx-ui/releases/tag/v3.9.0-lucx.290
+
+---
+
+## lucx.289 — AWG self-recovery for stale interfaces, fixes post-update "already up" loop (Igor, 2026-10-10)
+
+Igor, after a panel update: every 10 s `awg: reconcile failed for inbound 1: awg interface already up: awg1`, the AWG 3.1 inbound never came up, disable/enable did not help, a panel restart restored it. Mechanism: a tick with a transient `KernelAvailable()==false` (module/tools being swapped during the update's rebuild hook) runs the kernel `Reconcile(nil)` handover — procs emptied + markered `.conf` backed up/removed, while the best-effort `awg-quick down` failed (tools swapped mid-tick) leaving the iface up. Next ticks: conf regenerated, `Start` → "already up" forever — the orphan sweep (`m.swept`) runs once per process and disable/enable does not touch the stray; only a fresh process recovers (new sweep classifies the regenerated marked conf as ours and `ip link del`s it).
+
+Fix in `internal/awg/manager.go`: `recoverStaleInterface` runs before every `ensureLocked` start attempt — graceful `awg-quick down`, hard `ip link del` fallback (same op the orphan sweep uses; the conf at configPath is always ours at that point, and a foreign iface holding our inbound's id breaks its UDP port anyway). Self-heals in ≤1 tick, no user action. Seams for tests: `awgQuickFunc` / `netClassBase` / `deleteNetdev` vars; Adopt unaffected (only starts a DOWN iface).
+
+**lucxVersion:** lucx.289
+
+Files: `internal/awg/process.go` (seams), `internal/awg/manager.go` (`recoverStaleInterface`), `internal/awg/manager_recover_test.go` (new), `.agents/07-debug-awg.md` (Pattern 1ae).
+
+Tests: `TestEnsureLocked_RecoversStaleInterface`, `TestEnsureLocked_RecoversWhenQuickDownFails`; `go test ./internal/awg/... ./internal/lucx/... -count=1` green; `gofumpt` clean.
+
+---
+
+## lucx.288 — Share-only sidecar clients: удаление и переименование без settings.clients (2026-10-08)
+
+Тестер @dantelcp: удаление клиента с инбаунда qWDTT / CSQTT / Telegram Web Proxy (tproxy) / OpenFlux падало `invalid clients format in inbound settings`, а переименование ловило `UNIQUE constraint failed: clients.email`. Причина: связи клиентов лежат в `client_inbounds` (share-only держит клиентов только там), но все три пути удаления (`DelInboundClientByEmail`, пакетный `delInboundClients` из BulkDetach, `bulkDelInboundClients` из BulkDelete) всё ещё требовали массив `clients[]` внутри settings-JSON — а у share-only его нет (slim-список для UI инжектится на лету, `mergeShareOnlySlimClients`). Обход триггерами в скрипте тестера больше не нужен.
+
+1. `DelInboundClientByEmail` / `delInboundClients` / `bulkDelInboundClients`: ранний выход при `shareOnlySidecar(protocol)` в новый хелпер `detachShareOnlyClient` (`lucx_online.go`): чистка статов/IP для email, которых нет на других инбаундах (та же логика, что и обычный путь, `runSerializedTx`), затем `ApplyInboundClientDelta` только по таблице ссылок. Rebase настроек не нужен (трогать нечего), runtime-push не нужен: все пять share-only ядер аутентифицируют один общий секрет — пер-клиентских списков в sidecar нет, консистентность держит 10-секундный reconcile туннельного джоба. Node-push не требуется: node-sync share-only снапшоты не импортирует (#59), привязки ноды — её собственные.
+2. Переименование (`UpdateInboundClient` share-only-ветка): дельта с новым emails искала запись и вставляла новую — уникальный индекс `clients.email` падал, т.к. старая запись ещё жила. Теперь rename записи в той же транзакции до дельты (guard `renameTaken == 0`, byte-compare — case-переименования тоже проходят, как в generic-ветке), затем дельта находит уже переименованную запись; ссылка сохраняется (id не меняется), detach oldEmail после rename — пустой no-op. Безопасно при смешанных инбаундах: какой apply переименует запись первым, второй видит renameTaken>0 и не дублирует.
+
+Rule 0: не трогает настройки инбаундов/ключи/креды клиентов. Rule 0b: share-only-ветка в UpdateInboundClient уже существовала (эпоха lucx.119) — расширяем, поведение обычных протоколов не меняется.
+
+**lucxVersion:** lucx.288
+
+Files: `internal/web/service/lucx_online.go` (хелпер, PolyForm), `internal/web/service/client_inbound_apply.go` (3 HOOK), `internal/web/service/client_bulk.go` (1 HOOK), `internal/web/service/client_shareonly_delete_test.go` (новый тест).
+
+Tests: новый `TestDeleteClientOnShareOnlyInbound` + `TestRenameClientOnShareOnlyInbound` (qwdtt/csqtt/openflux/tproxy — до фикса падали с теми же сообщениями, что и тестеры). Регрессия: `go test ./internal/web/service/ ./internal/web/runtime/ ./internal/awg/... ./internal/lucx/... ./internal/database/... -count=1` — зелёный; `bin/check-lucx.sh` gofumpt OK; наш тестовый файл с SPDX, origin-файлы без SPDX — как и было (Rule 10).
+
+---
+
+## lucx.287 — Upstream fix 6729: update.sh migrates DB before service start (2026-10-07)
+
+Cherry-pick of MHSanaei/3x-ui#6729 (commit 2ccf1f6, closes upstream issue #6728): `update_x-ui()` used to `systemctl start x-ui` and then run `config_after_update` (`x-ui setting -show true` + `x-ui migrate`), so the service and the CLI both ran `InitDB()` concurrently on the same DB. On a schema-adding upgrade the loser died (`duplicate column name: exclude_from_sub` on 3.8.5→3.9.0; also `table node_pending_resets already exists`). update.sh now runs `"${xui_folder}/x-ui" migrate` to completion **before** both the OpenRC and systemd start paths (+5 lines, upstream order identical at the insertion point). Our `update.sh` has 4 LUCX-HOOK blocks — none near the change; no conflicts.
+
+**lucxVersion:** lucx.287
+
+Files: `update.sh`.
+
+Tests: `bash -n update.sh` (syntax OK); `bin/check-lucx.sh` hook count unchanged (4). Shell step ordering needs a Linux host (CGO/`x-ui` binary), verified upstream by 0/30 concurrent-InitDB reproduction.
+
+---
+
+## lucx.286 — Gateway no longer restarts on every node-sync push (2026-10-05)
+
+Gennady, both panels on lucx.283: exit-node `gateway-3` SIGTERM every ~5s (no `config changed`), master `POST …/inbounds/update/3` EOF on the same tick. The push itself killed caddy, because `Local.UpdateInbound` Del+Add'd every tunnel proto and the panel API is behind that gateway on :443. EOF meant `pushedFP` was never stored, so the 5s reconcile retried forever. Same-protocol enable now goes through Ensure; an unchanged fingerprint does not SIGTERM. Rule 0 safe: no client fields rewritten.
+
+**lucxVersion:** lucx.286
+
+Files: `internal/web/runtime/local.go`, `internal/web/runtime/tunnel_proto_test.go`.
+
+Tests: `go test ./internal/web/runtime/ -count=1 -run TestTunnelUpdateDropsRunning`.
+
+---
+
+## lucx.285 — Peer LAN routes behind AWG clients (issue #126, 2026-10-05)
+
+admst87: client's LAN in AllowedIPs (`10.201.0.3/32, 192.168.10.0/24`) got no route on the server — `Table = off` leaves awg-quick installing only the peer /32s, so reach-back into the client's LAN needed a manual `ip route add 192.168.10.0/24 dev awg2`. Reconcile now converges those routes: `peerRoutePrefixes` picks IPv4 prefixes wider than /32, excluding the default and the server's own tunnel subnet; `ensurePeerRoutesLocked` (linux) `ip route replace <prefix> dev awgN` every tick (self-heals after reboot / iface restart, like ensureNatRules), the installed list rides `managed.peerRoutes`; `flushPeerRoutesLocked` deletes exactly that list on inbound removal / reconcile sweep — a foreign same-prefix route on another dev is untouched. routeThroughXray inbounds skip it (Xray TUN owns routing). Rule 0 safe: peer AllowedIPs are read-only.
+
+**lucxVersion:** lucx.285
+
+Files: `internal/awg/peer_routes{,_linux,_other,_test}.go` (new), `internal/awg/manager.go` (managed.peerRoutes + 3 call sites).
+
+Tests: `go test ./internal/awg/ -count=1` (new `TestPeerRoutePrefixes`, issue case exact). Linux paths compile on CI (`go build ./...`).
+
+---
+
+## lucx.284 — Sponsors feed to fork + uninstall reinstall hint (2026-10-05)
+
+Upstream v3.9.0 added a Sponsors page fed from `sponsors.sanaei.dev/3X` — MHSanaei's paid slots rendered in our panel. `internal/web/service/panel/sponsor.go` now points `sponsorsURL`/`sponsorLogoBase` at raw `AlexeyLCP/lucx-ui/main/sponsors/*` (LUCX-HOOK) and reads `sponsors/sponsors.json` from the repo under XUI_DEBUG. The list carries Boosty supporters in tier order (Handshake → Pong → Ping → subscribers: VladufQa, пётр смолин, Сила Растений, Виталий Зайцев, Михаил Ляшенко, Камслат Глорихо, Игорь, Aleksandr S.) plus contributor thanks (Kirill Rudenko, 302ba, Aleksandr SacredX, alireza0, STRENCH0, 3x-ui team); contact → Boosty. i18n intro/yourBrandText de-3X-UI'd in all 13 locales. README financial-supporters block re-grouped by Boosty tier in RU + 5 translated READMEs, pointing at `/panel/sponsors`. `x-ui.sh` uninstall hint printed MHSanaei's install command — now it follows `lucx_install_source` (GitHub raw / Yandex dist bundle) like `install()` (LUCX-HOOK).
+
+**lucxVersion:** lucx.284
+
+Tests: `bash -n x-ui.sh`; sponsor tests are upstream files (`go test ./internal/web/service/panel/` needs CGO — CI). JSON validated locally.
+
+---
+
+## lucx.283 — Node sync: stale cached inbound id self-heals (2026-10-05)
+
+Gennady: deleted a node's cover site and recreated it; the master then POSTed `inbounds/update/3 ... record not found` every 5 s tick forever. `Remote` cached the node-side tag→id; an inbound recreated on the node (new row id) left that cache stale, and `resolveRemoteID` served the dead id without a refetch. `postUpdate` now drops the cache entry on a "record not found" answer and retries once with a refetched id, falling back to create when the tag is gone entirely — the dirty-reconcile loop converges instead of ping-ponging a dead id.
+
+**lucxVersion:** lucx.283
+
+Tests: `go test ./internal/web/runtime/ -count=1` (new: `TestUpdateInboundStaleIDRetriesFreshID`)
+
+---
+
+## lucx.282 — Masking gateway exits on SIGTERM (2026-10-05)
+
+Gennady: `gateway-N did not stop after SIGTERM` while masking is on; gone when masking is off. Caddy's default HTTP grace period is eternal, so a :443 with live connections logs `exiting` and never dies inside our 5s stop. Unified gateway, cover, naive and tproxy Caddyfiles now set `grace_period 1s`. A saved `l4http cover-N` route is dropped when that site block did not render (`no http listener`). Empty `HOME` (systemd) is replaced so Caddy stops writing storage into the cwd. A config-change restart logs `config changed, restarting` — if that line repeats every ~10s, the fingerprint is still moving.
+
+**lucxVersion:** lucx.282
+
+Tests: `go test ./internal/lucx/tunnel/ -count=1`
+
+---
+
+## lucx.281 — OpenFlux sidecar (2026-10-04)
+
+Inbound-only OpenFlux exit (`openflux-{id}`), same skeleton as olcRTC. Always l4. Direct listens on the inbound port; optional Yandex / Mail.ru / Cups URLs. One `openflux://v1/` link, one active client. Secret minted once on save; clearing the field does not rotate it. New user = new inbound. Form notes on olcRTC / OpenFlux say that; qWDTT / CSQTT notes say a second inbound on the host will not start.
+
+Binary is an external GPL-3.0 process (pin `ba31d0fc` in `bin/pack-sidecars.sh`), not linked. GitHub tarball ships `openflux-linux-{amd64,arm64}`. Skipped: l3 RST drop, routeThroughXray, MAX, captcha IPC, per-client credentials.
+
+**lucxVersion:** lucx.281
+
+Tests: `go test ./internal/lucx/tunnel/ -count=1`; frontend `tsc --noEmit` + `openflux-link` vitest. Full `go test ./internal/web/service` not run here (Windows sqlite CGO).
+
+---
+
+## lucx.280 — overlay upstream v3.9.0 (2026-10-03)
+
+Fresh `origin/main` (tag v3.9.0 + two TUIC test fixes). LucX hooks reapplied on top, not a blanket `--ours`.
+
+Kept: kernel `awg` and tunnel sidecars, share-only node sync, inbound save does not rewrite client lifecycle (their new path + sidecar in-place), `KeepAliveValue` Scan, AWG `.conf` in the bot. Took theirs: native TUIC (no `tuic-server` binary), AmneziaWG/TUIC/MTProto node deploy, iOS S1–S3 bounds on server obfuscation only, overlapping `allowedIPs` rejected on save (issued peers not rewritten on boot). Dropped upstream's deleted deploy-smoke workflow.
+
+**lucxVersion:** lucx.280
+
+Tests: `go test ./internal/amneziawg/ ./internal/amneziawgnet/ ./internal/awg/ ./internal/lucx/...`; frontend `tsc --noEmit`. Full `go test ./internal/web/service` not run here (Windows sqlite CGO).
+
+---
+
+## Fix: DKMS build fails on kernels with backported udp_tunnel ABI below 7.1.5 (lucx.279)
+
+Igor (04.10.2026): fresh install on Ubuntu `7.0.0-38-generic` — DKMS exit 2,
+`expected ‘struct sock *’ but argument is of type ‘struct socket *’` in
+`setup_udp_tunnel_sock` (socket.c:432/447). Pattern 1s again, inverted.
+
+The lucx.218 pin `3c38e168` already carries upstream's own 7.1.5 fix
+(upstream commit `0bcc6dfa`): call sites pass `new4->sk`, and
+`compat/compat.h:1447` re-unwraps `sk → sk->sk_socket` gated on
+`LINUX_VERSION_CODE < KERNEL_VERSION(7,1,5)`. Igor's kernel has the NEW
+`struct sock *` ABI backported **under a 7.0.0 version code** → the gate
+enables the macro → it strips a `struct sock *` back to `struct socket *`
+→ the same compile error, now produced by the tree's own fix. The old
+lucx.147 patcher (socket.c call-site rewrite) had silently become dead code:
+needles no longer match the `->sk` call sites, python `sys.exit(1)` was
+swallowed by the `|| echo`, the build ran unpatched.
+
+Fix (bin/install-awg-module.sh): `apply_udp_tunnel_abi_compat` now patches
+compat/compat.h instead of socket.c — replaces the version-gated macro pair
+with compile-time signature dispatch (`__builtin_types_compatible_p` on the
+real prototype, PR #218 style), correct on every kernel. Wrapper bodies are
+defined BEFORE the `#define`s so the raw symbol inside a body resolves to the
+real kernel function. Old-ABI kernels unchanged in behavior.
+
+Verified in WSL gcc: patched tree compiles socket.c clean on new-ABI 7.1.5+,
+new-ABI backport under 7.0.0 (Igor case), old-ABI 6.12 (kernel header) and
+old-ABI with the tree builtin udp_tunnel shim; the unpatched macro on the
+backport reproduces Igor's exact error.
+
+Healing for live hosts before the release lands: delete the
+`#define setup_udp_tunnel_sock …` / `#define udp_tunnel_sock_release …` pair
+(inside `#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 1, 5)` … `#endif` at the
+end of `/usr/src/amneziawg-*/compat/compat.h`) — the call sites already pass
+`struct sock *`, so the raw functions are correct there — then
+`dkms build -m amneziawg -v <ver> -k $(uname -r)` + install + modprobe.
+
+**lucxVersion:** lucx.279
+
+Tests: WSL gcc matrix (4 kernel scenarios + negative repro); gofumpt via
+`bin/check-lucx.sh` OK (229 files, SPDX list unchanged); Pattern 1s extended
+in `.agents/07-debug-awg.md`.
+
+---
+
 ## lucx.278 — Sidecar core bumps: naive-client, mieru, TrustTunnel client (2026-10-02)
 
 Annual review of sidecar pins against upstream releases (per-request refresh of `bin/pack-sidecars.sh` + `third_party/sidecars/linux-amd64/`):

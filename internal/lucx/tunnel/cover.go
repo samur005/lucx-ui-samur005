@@ -156,12 +156,12 @@ func writeCaddyServers(b *strings.Builder, h1h2, proxyProtocol bool) {
 
 func RenderCoverCaddyfile(hostname, cert, key string, a coverAttach) string {
 	var b strings.Builder
-	b.WriteString("{\n\tadmin off\n\tauto_https off\n\tskip_install_trust\n")
+	b.WriteString("{\n\tadmin off\n\tauto_https off\n\tgrace_period 1s\n\tskip_install_trust\n")
 	h1h2 := a.tproxyRelay > 0 || (a.naive != nil && !a.naive.EnableH3)
 	writeCaddyServers(&b, h1h2, a.skipHTTP)
 	b.WriteString("}\n")
 	if !a.skipHTTP {
-		b.WriteString(":" + strconv.Itoa(coverHTTPPort) + " {\n\tredir https://{host}{uri} permanent\n}\n")
+		writeHTTPRedirectSite(&b, ":"+strconv.Itoa(coverHTTPPort), "")
 	}
 	writeCoverSite(&b, hostname, cert, key, a)
 	return b.String()

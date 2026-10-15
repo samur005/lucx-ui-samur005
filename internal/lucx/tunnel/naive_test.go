@@ -27,7 +27,7 @@ func TestNameRegistry(t *testing.T) {
 	if !Olcrtc.Valid() || Olcrtc.DisplayName() != "olcRTC" {
 		t.Errorf("Olcrtc Valid/DisplayName broken: %v %q", Olcrtc.Valid(), Olcrtc.DisplayName())
 	}
-	if got := All(); len(got) != 12 || got[0] != Naive || got[1] != Olcrtc || got[2] != Qwdtt || got[3] != Csqtt || got[4] != Mieru || got[5] != TrustTunnel || got[6] != Anytls || got[7] != Tproxy || got[8] != Mtproxy || got[9] != TproxyCaddy || got[10] != Cover || got[11] != Gateway {
+	if got := All(); len(got) != 13 || got[0] != Naive || got[1] != Olcrtc || got[2] != Qwdtt || got[3] != Csqtt || got[4] != Mieru || got[5] != TrustTunnel || got[6] != Anytls || got[7] != Tproxy || got[8] != Mtproxy || got[9] != TproxyCaddy || got[10] != Cover || got[11] != Gateway || got[12] != Openflux {
 		t.Errorf("All() = %v", got)
 	}
 	if got := Olcrtc.BinaryName(); !strings.HasPrefix(got, "olcrtc-") {
@@ -321,7 +321,7 @@ func TestRenderCaddyfileEscapesCredentials(t *testing.T) {
 func TestRenderCaddyfileRawMode(t *testing.T) {
 	cfg := NaiveConfig{UseRawConfig: true, RawConfig: ":8443 {\n\trespond \"ok\"\n}"}
 	got := cfg.RenderCaddyfile(nil, "")
-	if !strings.HasPrefix(got, "{\n\tadmin off\n\tskip_install_trust\n}\n\n") {
+	if !strings.HasPrefix(got, "{\n\tadmin off\n\tgrace_period 1s\n\tskip_install_trust\n}\n\n") {
 		t.Errorf("raw mode must prepend admin off:\n%q", got)
 	}
 	if !strings.Contains(got, ":8443 {\n\trespond \"ok\"\n}") {

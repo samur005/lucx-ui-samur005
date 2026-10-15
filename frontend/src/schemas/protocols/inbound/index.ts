@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { AmneziawgInboundSettingsSchema } from './amneziawg';
 import { HttpInboundSettingsSchema } from './http';
 import { HysteriaInboundSettingsSchema } from './hysteria';
+import { MasqueInboundSettingsSchema } from './masque';
 import { MixedInboundSettingsSchema } from './mixed';
 import { MtprotoInboundSettingsSchema } from './mtproto';
 import { AwgInboundSettingsSchema } from './awg'; // LUCX-HOOK: AWG protocol
@@ -10,6 +11,7 @@ import { NaiveInboundSettingsSchema } from './naive'; // LUCX-HOOK: NaiveProxy
 import { OlcrtcInboundSettingsSchema } from './olcrtc'; // LUCX-HOOK: olcRTC
 import { QwdttInboundSettingsSchema } from './qwdtt'; // LUCX-HOOK: qWDTT
 import { CsqttInboundSettingsSchema } from './csqtt'; // LUCX-HOOK: CSQTT
+import { OpenfluxInboundSettingsSchema } from './openflux'; // LUCX-HOOK: OpenFlux
 import { MieruInboundSettingsSchema } from './mieru'; // LUCX-HOOK: mieru
 import { TrustTunnelInboundSettingsSchema } from './trusttunnel'; // LUCX-HOOK: TrustTunnel
 import { AnytlsInboundSettingsSchema } from './anytls'; // LUCX-HOOK: AnyTLS
@@ -28,6 +30,7 @@ import { WireguardInboundSettingsSchema } from './wireguard';
 export * from './amneziawg';
 export * from './http';
 export * from './hysteria';
+export * from './masque';
 export * from './mixed';
 export * from './mtproto';
 export * from './awg'; // LUCX-HOOK: AWG protocol
@@ -35,6 +38,7 @@ export * from './naive'; // LUCX-HOOK: NaiveProxy
 export * from './olcrtc'; // LUCX-HOOK: olcRTC
 export * from './qwdtt'; // LUCX-HOOK: qWDTT
 export * from './csqtt'; // LUCX-HOOK: CSQTT
+export * from './openflux'; // LUCX-HOOK: OpenFlux
 export * from './mieru'; // LUCX-HOOK: mieru
 export * from './trusttunnel'; // LUCX-HOOK: TrustTunnel
 export * from './anytls'; // LUCX-HOOK: AnyTLS
@@ -74,11 +78,13 @@ export const InboundSettingsSchema = z.discriminatedUnion('protocol', [
   z.object({ protocol: z.literal('olcrtc'), settings: OlcrtcInboundSettingsSchema }), // LUCX-HOOK: olcRTC
   z.object({ protocol: z.literal('qwdtt'), settings: QwdttInboundSettingsSchema }), // LUCX-HOOK: qWDTT
   z.object({ protocol: z.literal('csqtt'), settings: CsqttInboundSettingsSchema }), // LUCX-HOOK: CSQTT
+  z.object({ protocol: z.literal('openflux'), settings: OpenfluxInboundSettingsSchema }), // LUCX-HOOK: OpenFlux
   z.object({ protocol: z.literal('mieru'), settings: MieruInboundSettingsSchema }), // LUCX-HOOK: mieru
   z.object({ protocol: z.literal('trusttunnel'), settings: TrustTunnelInboundSettingsSchema }), // LUCX-HOOK: TrustTunnel
   z.object({ protocol: z.literal('anytls'), settings: AnytlsInboundSettingsSchema }), // LUCX-HOOK: AnyTLS
   z.object({ protocol: z.literal('tproxy'), settings: TproxyInboundSettingsSchema }), // LUCX-HOOK: Telegram WEB proxy
   z.object({ protocol: z.literal('cover'), settings: CoverInboundSettingsSchema }), // LUCX-HOOK: cover site
-  z.object({ protocol: z.literal('gateway'), settings: GatewayInboundSettingsSchema }), // LUCX-HOOK: nginx SNI mux
+  z.object({ protocol: z.literal('gateway'), settings: GatewayInboundSettingsSchema }), // LUCX-HOOK: nginx SNI mux,
+  z.object({ protocol: z.literal('masque'), settings: MasqueInboundSettingsSchema }),
 ]);
 export type InboundSettings = z.infer<typeof InboundSettingsSchema>;

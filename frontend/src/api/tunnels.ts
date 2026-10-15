@@ -18,6 +18,7 @@ import {
   AnytlsStatusSchema,
   TproxyStatusSchema,
   CsqttStatusSchema,
+  OpenfluxStatusSchema,
   type NaiveConfig,
   type NaiveStatus,
   type OlcrtcConfig,
@@ -29,6 +30,7 @@ import {
   type AnytlsStatus,
   type TproxyStatus,
   type CsqttStatus,
+  type OpenfluxStatus,
 } from '@/schemas/tunnel';
 
 export type {
@@ -43,6 +45,7 @@ export type {
   AnytlsStatus,
   TproxyStatus,
   CsqttStatus,
+  OpenfluxStatus,
 };
 
 // JSON_HEADERS is load-bearing on every POST (lucx.69 lesson).
@@ -54,6 +57,7 @@ const QWDTT = '/panel/api/tunnel/qwdtt';
 const VK = '/panel/api/tunnel/vk';
 const WB = '/panel/api/tunnel/wb';
 const CSQTT = '/panel/api/tunnel/csqtt';
+const OPENFLUX = '/panel/api/tunnel/openflux';
 const MIERU = '/panel/api/tunnel/mieru';
 const TRUSTTUNNEL = '/panel/api/tunnel/trusttunnel';
 const ANYTLS = '/panel/api/tunnel/anytls';
@@ -166,6 +170,24 @@ export const tunnelsApi = {
   },
   csqttDeleteBinary: (): Promise<Msg<null>> =>
     HttpUtil.post<null>(`${CSQTT}/deleteBinary`, {}, JSON_HEADERS),
+
+  openfluxStatus: async (): Promise<Msg<OpenfluxStatus>> => {
+    const raw = await HttpUtil.get<OpenfluxStatus>(`${OPENFLUX}/status`, undefined, {
+      silent: true,
+    });
+    return parseMsg(raw, OpenfluxStatusSchema, 'tunnel/openfluxStatus');
+  },
+  openfluxLogs: (lines = 200): Promise<Msg<string[]>> =>
+    HttpUtil.get<string[]>(`${OPENFLUX}/logs?lines=${lines}`),
+  openfluxDownload: (url: string, sha256?: string): Promise<Msg<null>> =>
+    HttpUtil.post<null>(`${OPENFLUX}/download`, { url, sha256 }, JSON_HEADERS),
+  openfluxUpload: (file: File): Promise<Msg<null>> => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return HttpUtil.post<null>(`${OPENFLUX}/upload`, fd);
+  },
+  openfluxDeleteBinary: (): Promise<Msg<null>> =>
+    HttpUtil.post<null>(`${OPENFLUX}/deleteBinary`, {}, JSON_HEADERS),
 
   mieruStatus: async (): Promise<Msg<MieruStatus>> => {
     const raw = await HttpUtil.get<MieruStatus>(`${MIERU}/status`, undefined, { silent: true });

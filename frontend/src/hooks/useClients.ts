@@ -100,6 +100,9 @@ export interface ClientSpeedEntry {
   down: number;
 }
 
+// LUCX-HOOK: 'node' = node-hosted clients' speed from the master's node sync.
+type ClientSpeedSource = 'xray' | 'tuic' | 'node';
+
 type ClientStatRow = ClientTraffic & { email?: string };
 
 export function sameSpeedMap(
@@ -305,11 +308,31 @@ export function useClients(options: UseClientsOptions = {}) {
   // settings request still lets the page fall back and render.
   const settingsReady = defaultsQuery.isFetched;
 
-  const [clientSpeed, setClientSpeed] = useState<Record<string, ClientSpeedEntry>>({});
-  // LUCX-HOOK: per-scope speed maps (local Xray poll vs node sync), see applyTrafficEvent
-  const localClientSpeedRef = useRef<Record<string, ClientSpeedEntry>>({});
-  const nodeClientSpeedRef = useRef<Record<string, ClientSpeedEntry>>({});
-  // END LUCX-HOOK
+  const [clientSpeedBySource, setClientSpeedBySource] = useState<
+    Partial<Record<ClientSpeedSource, Record<string, ClientSpeedEntry>>>
+  >({});
+  const clientSpeedExpiryTimers = useRef<Partial<Record<ClientSpeedSource, number>>>({});
+  const clientSpeedSourceVersions = useRef<Record<ClientSpeedSource, number>>({ xray: 0, tuic: 0, node: 0 });
+  const clientSpeed = useMemo(() => {
+    const combined: Record<string, ClientSpeedEntry> = {};
+    for (const source of Object.values(clientSpeedBySource)) {
+      if (!source) continue;
+      for (const [email, speed] of Object.entries(source)) {
+        const current = combined[email] ?? { up: 0, down: 0 };
+        combined[email] = { up: current.up + speed.up, down: current.down + speed.down };
+      }
+    }
+    return combined;
+  }, [clientSpeedBySource]);
+
+  useEffect(
+    () => () => {
+      for (const timer of Object.values(clientSpeedExpiryTimers.current)) {
+        if (timer !== undefined) window.clearTimeout(timer);
+      }
+    },
+    [],
+  );
   const summary = listQuery.data?.summary ?? DEFAULT_SUMMARY;
 
   const invalidateAll = useCallback(() => {
@@ -706,6 +729,7 @@ export function useClients(options: UseClientsOptions = {}) {
         tgId: Number(base.tgId) || 0,
         reset: Number(base.reset) || 0,
         resetDay: Number(base.resetDay) || 0,
+        resetWeekday: Number(base.resetWeekday) || 0,
         resetMax: Number(base.resetMax) || 0,
         trafficReset: base.trafficReset || 'never',
         trafficResetDay: Number(base.trafficResetDay) || 1,
@@ -734,6 +758,9 @@ export function useClients(options: UseClientsOptions = {}) {
       const p = payload as {
         onlineClients?: string[];
         clientTraffics?: { email: string; up: number; down: number }[];
+        clientTrafficSource?: 'xray' | 'tuic';
+        clientTrafficIntervalMs?: number;
+        // LUCX-HOOK: node sync sends node-hosted clients' deltas separately.
         nodeClientTraffics?: { email: string; up: number; down: number }[];
       };
       if (Array.isArray(p.onlineClients)) {
@@ -744,36 +771,61 @@ export function useClients(options: UseClientsOptions = {}) {
       // identically (isActiveSpeed treats both as inactive), so the zeros are
       // dropped and an unchanged result returns the previous object — which lets
       // React bail out of the update instead of re-rendering the table.
-      const toSpeedMap = (rows: { email: string; up: number; down: number }[]) => {
-        const out: Record<string, ClientSpeedEntry> = {};
+      // Each source (local Xray, TUIC, node sync) replaces only its own map and
+      // the table reads the sum, so the polls don't clobber each other.
+      const applySource = (
+        rows: { email: string; up: number; down: number }[],
+        source: ClientSpeedSource,
+        intervalMs: number | undefined,
+      ) => {
+        const next: Record<string, ClientSpeedEntry> = {};
+        const sampleIntervalMs =
+          typeof intervalMs === 'number' && Number.isFinite(intervalMs) && intervalMs > 0
+            ? intervalMs
+            : TRAFFIC_POLL_INTERVAL_S * 1000;
+        const sampleIntervalSeconds = sampleIntervalMs / 1000;
         for (const ct of rows) {
           if (!ct || !ct.email) continue;
           const up = ct.up || 0;
           const down = ct.down || 0;
           if (up === 0 && down === 0) continue;
-          out[ct.email] = {
-            up: up / TRAFFIC_POLL_INTERVAL_S,
-            down: down / TRAFFIC_POLL_INTERVAL_S,
+          const current = next[ct.email] ?? { up: 0, down: 0 };
+          next[ct.email] = {
+            up: current.up + up / sampleIntervalSeconds,
+            down: current.down + down / sampleIntervalSeconds,
           };
         }
-        return out;
+        setClientSpeedBySource((prev) =>
+          sameSpeedMap(prev[source] ?? {}, next) ? prev : { ...prev, [source]: next },
+        );
+
+        const version = ++clientSpeedSourceVersions.current[source];
+        const previousTimer = clientSpeedExpiryTimers.current[source];
+        if (previousTimer !== undefined) window.clearTimeout(previousTimer);
+        clientSpeedExpiryTimers.current[source] = window.setTimeout(
+          () => {
+            if (clientSpeedSourceVersions.current[source] !== version) return;
+            delete clientSpeedExpiryTimers.current[source];
+            setClientSpeedBySource((prev) => {
+              if (!prev[source]) return prev;
+              const nextSources = { ...prev };
+              delete nextSources[source];
+              return nextSources;
+            });
+          },
+          Math.min(sampleIntervalMs * 2, 120_000),
+        );
       };
-      // LUCX-HOOK: master shows node clients' speed. Local Xray poll sends
-      // clientTraffics, node sync sends nodeClientTraffics; each replaces only its
-      // own scope and the table reads the sum, so the two 5s polls don't clobber
-      // each other.
-      const { clientTraffics: localRows, nodeClientTraffics: nodeRows } = p;
-      if (Array.isArray(localRows)) localClientSpeedRef.current = toSpeedMap(localRows);
-      if (Array.isArray(nodeRows)) nodeClientSpeedRef.current = toSpeedMap(nodeRows);
-      if (Array.isArray(localRows) || Array.isArray(nodeRows)) {
-        const next: Record<string, ClientSpeedEntry> = { ...localClientSpeedRef.current };
-        for (const [email, entry] of Object.entries(nodeClientSpeedRef.current)) {
-          const base = next[email];
-          next[email] = base
-            ? { up: base.up + entry.up, down: base.down + entry.down }
-            : entry;
-        }
-        setClientSpeed((prev) => (sameSpeedMap(prev, next) ? prev : next));
+      if (Array.isArray(p.clientTraffics)) {
+        applySource(
+          p.clientTraffics,
+          p.clientTrafficSource === 'tuic' ? 'tuic' : 'xray',
+          p.clientTrafficIntervalMs,
+        );
+      }
+      // LUCX-HOOK: master shows node clients' speed (node sync, 5s window).
+      if (Array.isArray(p.nodeClientTraffics)) {
+        applySource(p.nodeClientTraffics, 'node', undefined);
       }
       // END LUCX-HOOK
     },

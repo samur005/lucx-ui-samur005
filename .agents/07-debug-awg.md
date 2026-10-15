@@ -4,6 +4,12 @@ Extracted from AGENTS.md. This file is project law.
 
 ---
 
+### Pattern 1ah: after v3.10.0-lucx.291, AWG down and conf lost HeaderProtectionKey — FIXED (lucx.292)
+- **Symptom:** `open /etc/amnezia/amneziawg/awgN.conf: read-only file system` every 10s, or the file is written without HeaderProtectionKey / ContentPaddingAddition / the five device timers. Interface missing, or up but the peer handshake fails. Outbound `awgo-N` can be up and still not pass ping. Rollback to .290 restores it.
+- **Cause:** upstream sandbox. `ProtectSystem=full` froze `/etc` and the drop-in omitted `/etc/amnezia`. `ProtectKernelTunables` masks `/proc/kallsyms`, so `ModuleSupportsAwg3` withheld the AWG3 lines. Sysfs version is `1.0.0` on every tree (Pattern 1d) and must not be used as the fallback.
+- **Fix:** drop-in and unit `ReadWritePaths` include `/etc/amnezia`. Masked kallsyms trusts sysfs only at 3.x; a `1.0.0` stamp scans `/var/lib/dkms/amneziawg/<ver>/<kernel>/*/module/amneziawg.ko` (also `.ko.xz`). Update replaces only `10-xui-sandbox.conf`.
+- **Healing:** update to lucx.292 and restart. Reconcile rewrites the conf. Clients keep their old profiles.
+
 ### Pattern 1ag: P2P on, clients still cannot ping each other (lucx.224)
 - **Symptom:** inbound `p2p` is on, `.conf` already `AllowedIPs = 0.0.0.0/0`, but `.2` cannot reach `.3`.
 - **Cause:** `routeThroughXray` policy rule `iif awgN lookup 1000+N` still steals dest=subnet into tunN, or leftover `FORWARD -i awgN -o awgN DROP`. Userspace/no-module: not supported.
@@ -178,15 +184,17 @@ Extracted from AGENTS.md. This file is project law.
 - **Fix (lucx.135):** (1) `GET /panel/api/clients/subBody?url=…` — loopback to the local sub server (path+query only, host ignored; Host=subDomain for DomainValidator; neutral UA); frontend — all modal rows via `fetchSubscriptionBody`, Copy for AMNEZIA = config body; sub page gets `PageData.SubAwgUrl` and an AMNEZIA row (.conf/vpn:// — `<a href>` with attachment headers, copy = same-origin fetch). (2) `awg_speed_buffer.go` + LUCX-HOOK in `xray_traffic_job.go` — AWG deltas normalized to 5 s are folded into the same broadcast frame.
 - **Lesson:** a public listener without CORS ≠ a data source for the panel browser; any “download body” in the UI goes through a same-origin proxy. Live speed = broadcast deltas only; everything metered outside Xray (AWG, mtproto, tunnel) must fold its deltas into the shared frame.
 
-### Pattern 1s: DKMS “check kernel headers” but headers are fine — udp_tunnel ABI (kernel ≥ 7.1.5) — FIXED (lucx.147)
+### Pattern 1s: DKMS “check kernel headers” but headers are fine — udp_tunnel ABI (kernel ≥ 7.1.5) — FIXED (lucx.147, lucx.279)
 
 - **Cause:** Linux 7.1.5 changed `udp_tunnel_sock_release` / `setup_udp_tunnel_sock` from `struct socket *` to `struct sock *` (stable backport of Kuniyuki Iwashima’s udp_tunnel series). `amneziawg-linux-kernel-module` before `v3.1.20260828` still passed `struct socket *`. GCC 14 treats `-Wincompatible-pointer-types` as an error → `socket.o` fails. Headers **are** present; the old script message was wrong. Distros (Debian 13 `7.1.7+deb13`, CachyOS) ship this ABI under a 7.1.x `LINUX_VERSION_CODE`, so a version `#if` is not enough.
-- **Symptom:** `x-ui install-awg` / Cores → Install: clone succeeds, `dkms build` exit 2, “Ошибка сборки DKMS”. `make.log` shows `expected ‘struct sock *’ but argument is of type ‘struct socket *’` in `sock_free` / `wg_socket_init`. Build-first-safe leaves the old module loaded — do not reboot onto 7.1.x without a built module.
-- **Fix (lucx.147):** `bin/install-awg-module.sh` after clone applies the PR #218 wrappers (`__builtin_types_compatible_p` on the real signature) unless `wg_udp_tunnel_sock_release` is already in `socket.c` (no-op once upstream merges). DKMS failure prints the tail of `make.log` instead of blaming headers.
-- **Upstream:** the 7.1.5+ fix landed in tag `v3.1.20260828` (lucx.218 pin). In-script PR #218 wrappers stay as a no-op if `wg_udp_tunnel_sock_release` is already in `socket.c`.
-- **Seen on:** zinn65de-lc, kernel `7.1.7+deb13-amd64`, 2026-08-20.
+- **lucx.279 — backport BELOW the gate (Igor, 04.10.2026, Ubuntu `7.0.0-38-generic`):** the pin `3c38e168` tree already contains upstream’s own 7.1.5 fix (commit `0bcc6dfa`): call sites pass `new4->sk`, and `compat.h:1447` unwraps `sk → sk->sk_socket` **gated by `LINUX_VERSION_CODE < 7.1.5`**. Igor’s kernel has the **new** `struct sock *` ABI backported **under a 7.0.0 version code** → the gate enables the macro → it strips a `struct sock *` back to `sk->sk_socket` (a `struct socket *`) → same error, now caused by the tree’s own fix. The old lucx.147 `socket.c` patcher had become dead code: the needle `setup_udp_tunnel_sock(net, new4, &cfg)` no longer matches the `->sk` call sites, python exits 1, the `|| echo` swallowed it and the build ran unpatched — silent.
+- **Fix (lucx.279):** `apply_udp_tunnel_abi_compat compat/compat.h` now patches the **header**, not socket.c: replaces the version-gated macro pair with signature-dispatch wrappers (`__builtin_types_compatible_p(typeof(&setup_udp_tunnel_sock), …)`) that pick `struct sock *` vs `struct socket *` at compile time. Wrapper **bodies must be defined BEFORE the `#define`** — inside a body the raw symbol must still resolve to the real kernel function. `#if < 7.1.5` gate kept (the include must match the tree builtin shim window); the probe handles both ABIs, wrong gate or not. Applies to 4 call sites incl. `sock_free`; works with both the kernel `udp_tunnel.h` header and the tree’s own `compat/udp_tunnel/` shim.
+- **Verified (WSL gcc):** patched compat.h compiles `socket.c` clean on (a) new-ABI 7.1.5+, (b) new-ABI backported under 7.0.0 (Igor case), (c) old-ABI 6.12 with kernel header, (d) old-ABI with tree builtin shim; unpatched macro on (b) reproduces Igor’s exact error.
+- **Upstream:** the 7.1.5+ fix landed in tag `v3.1.20260828` (lucx.218 pin). Until upstream replaces the version `#if` with signature detection, the patch stays.
+- **Manual healing on a live box without waiting for a release** (kernel with backported ABI): delete the two `#define` lines from `/usr/src/amneziawg-*/compat/compat.h` — call sites then call the real `struct sock *` functions directly, correct on backported kernels — then `cd /usr/src/amneziawg-* && dkms build -m amneziawg -v <ver> -k $(uname -r) && dkms install -m amneziawg -v <ver> -k $(uname -r) && modprobe amneziawg`.
+- **Seen on:** zinn65de-lc, kernel `7.1.7+deb13-amd64`, 2026-08-20; Igor, `7.0.0-38-generic`, 2026-10-03.
 - **Workaround without a panel update:** boot 6.12 and rebuild; or apply PR #218 on the cloned tree and `dkms build` by hand. Do not reboot into 7.1.5+ until the module builds.
-- **Lesson:** a DKMS fail with headers in `/lib/modules/$(uname -r)/build` is an upstream ABI/source mismatch, not a missing-headers problem. Dump `make.log`. Kernel API changes that distros backport cannot be gated by `LINUX_VERSION_CODE`.
+- **Lesson:** a DKMS fail with headers in `/lib/modules/$(uname -r)/build` is an upstream ABI/source mismatch, not a missing-headers problem. Dump `make.log`. Kernel API changes that distros backport cannot be gated by `LINUX_VERSION_CODE` — and the backport can land **below** the gate the upstream fix uses, breaking even the fixed tree. Detect the signature, never the version.
 
 ### Pattern 1t: add client → peer missing, table 100N empty, syncconf loop — FIXED (lucx.154)
 
@@ -269,6 +277,13 @@ Extracted from AGENTS.md. This file is project law.
 - **Fix:** `Update` copies empty PrivateKey/PublicKey/PreSharedKey from the record, same as `Create`.
 - **Healing:** panel update, then re-download .conf (PSK already rotated). Or delete+recreate the client.
 - **Lesson:** any partial client save that can hit `fillProtocolDefaults` must preserve tunnel credentials the way Create does.
+
+### Pattern 1ae: post-update loop "reconcile failed ... awg interface already up: awgN" — FIXED (lucx.289)
+
+- **Symptom (Igor, 10.10.2026):** after a panel update the log prints `awg: reconcile failed for inbound 1: awg interface already up: awg1` every 10 s; the AWG 3.1 inbound never comes up; disable/enable does not help; a panel restart restores it.
+- **Cause:** a tick with a transient `KernelAvailable()==false` (module/tools being swapped during the update's rebuild window) runs the kernel `Reconcile(nil)` handover — procs emptied, markered `.conf` backed up/removed — while the best-effort `awg-quick down` failed, leaving the iface up. Next ticks: `writeServerConfig` regenerates the conf, `Start` → "already up" forever: `m.swept` makes the orphan sweep run ONCE per process and disable/enable does not touch the stray. A panel restart recovers because the regenerated conf carries the x-ui marker, so the new process's first sweep classifies the iface as ours and `ip link del`s it.
+- **Fix (lucx.289):** `Manager.recoverStaleInterface` before every `ensureLocked` start attempt: graceful `awg-quick down`, then a hard `ip link del` fallback (the same op the orphan sweep performs). Safe for every start: the conf at configPath is ours (just rewritten) and a foreign iface occupying our inbound id breaks the UDP port anyway. Adopt is unaffected (it only starts a DOWN iface). Test seams: `awgQuickFunc` / `netClassBase` / `deleteNetdev`.
+- **Lesson:** "once per process" flags (`m.swept`) combined with best-effort destroys (`Stop`, conf sweep) can build an unrecoverable loop; interface truth lives in the kernel, not the in-memory procs map, so every start attempt must tolerate the "iface up, no bookkeeping" state.
 
 ### Pattern 1ag: DKMS fail on Ubuntu 22.04 5.15.0-194 — `timer_delete` redeclared — FIXED (lucx.267)
 

@@ -4,6 +4,10 @@ import { generateAwgObfuscation } from '@/lib/xray/amneziawg-obfuscation';
 import type { AmneziawgInboundSettings } from '@/schemas/protocols/inbound/amneziawg';
 import type { HttpInboundSettings } from '@/schemas/protocols/inbound/http';
 import type { HysteriaClient, HysteriaInboundSettings } from '@/schemas/protocols/inbound/hysteria';
+import {
+  MASQUE_DEFAULT_ADDRESS_POOL,
+  type MasqueInboundSettings,
+} from '@/schemas/protocols/inbound/masque';
 import type { MixedInboundSettings } from '@/schemas/protocols/inbound/mixed';
 import type { MtprotoClient, MtprotoInboundSettings } from '@/schemas/protocols/inbound/mtproto';
 import type { AwgInboundSettings } from '@/schemas/protocols/inbound/awg'; // LUCX-HOOK: AWG
@@ -11,6 +15,7 @@ import type { NaiveInboundSettings } from '@/schemas/protocols/inbound/naive'; /
 import type { OlcrtcInboundSettings } from '@/schemas/protocols/inbound/olcrtc';
 import type { QwdttInboundSettings } from '@/schemas/protocols/inbound/qwdtt';
 import type { CsqttInboundSettings } from '@/schemas/protocols/inbound/csqtt';
+import type { OpenfluxInboundSettings } from '@/schemas/protocols/inbound/openflux';
 import type { MieruInboundSettings } from '@/schemas/protocols/inbound/mieru';
 import type { TrustTunnelInboundSettings } from '@/schemas/protocols/inbound/trusttunnel';
 import type { AnytlsInboundSettings } from '@/schemas/protocols/inbound/anytls';
@@ -307,6 +312,16 @@ export function createDefaultOlcrtcInboundSettings(): OlcrtcInboundSettings {
   };
 }
 
+export function createDefaultOpenfluxInboundSettings(): OpenfluxInboundSettings {
+  return {
+    secret: '',
+    shareHost: '',
+    yandexUrl: '',
+    mailruUrl: '',
+    cupsUrl: '',
+  };
+}
+
 export function createDefaultCsqttInboundSettings(): CsqttInboundSettings {
   return {
     listenAddr: '0.0.0.0:46000',
@@ -571,6 +586,10 @@ export function createDefaultAmneziawgInboundSettings(): AmneziawgInboundSetting
   };
 }
 
+export function createDefaultMasqueInboundSettings(): MasqueInboundSettings {
+  return { clients: [], address: [...MASQUE_DEFAULT_ADDRESS_POOL] };
+}
+
 export function createDefaultTuicInboundSettings(): TuicInboundSettings {
   return {
     server: {
@@ -614,12 +633,14 @@ export type AnyInboundSettings =
   | OlcrtcInboundSettings
   | QwdttInboundSettings
   | CsqttInboundSettings
+  | OpenfluxInboundSettings
   | MieruInboundSettings
   | TrustTunnelInboundSettings
   | AnytlsInboundSettings
   | TproxyInboundSettings
   | CoverInboundSettings
-  | GatewayInboundSettings;
+  | GatewayInboundSettings
+  | MasqueInboundSettings;
 
 export function createDefaultInboundSettings(protocol: string): AnyInboundSettings | null {
   switch (protocol) {
@@ -659,6 +680,8 @@ export function createDefaultInboundSettings(protocol: string): AnyInboundSettin
       return createDefaultQwdttInboundSettings();
     case 'csqtt':
       return createDefaultCsqttInboundSettings();
+    case 'openflux':
+      return createDefaultOpenfluxInboundSettings();
     case 'mieru':
       return createDefaultMieruInboundSettings();
     case 'trusttunnel':
@@ -671,6 +694,8 @@ export function createDefaultInboundSettings(protocol: string): AnyInboundSettin
       return createDefaultCoverInboundSettings();
     case 'gateway':
       return createDefaultGatewayInboundSettings();
+    case 'masque':
+      return createDefaultMasqueInboundSettings();
     default:
       return null;
   }

@@ -39,16 +39,18 @@ func sameClientConfigExceptUpdatedAt(a, b map[string]any) bool {
 	return aerr == nil && berr == nil && string(an) == string(bn)
 }
 
-// advancePushedInbound advances the node's reconcile-skip fingerprint from the
-// pre-edit settings to the saved ones after every per-client push succeeded.
-func advancePushedInbound(rt runtime.Runtime, prevSettings string, ib *model.Inbound) {
+// advancePushedInbound advances the node's reconcile-skip fingerprint to what the
+// per-client pushes delivered, not the saved settings a traffic tick may have extended.
+func advancePushedInbound(rt runtime.Runtime, prevSettings, pushedSettings string, ib *model.Inbound) {
 	rem, ok := rt.(*runtime.Remote)
 	if !ok {
 		return
 	}
 	prev := *ib
 	prev.Settings = prevSettings
-	rem.AdvancePushedInbound(&prev, ib)
+	pushed := *ib
+	pushed.Settings = pushedSettings
+	rem.AdvancePushedInbound(&prev, &pushed)
 }
 
 // delInboundClients removes several clients from a single inbound in one pass:
@@ -67,6 +69,16 @@ func (s *ClientService) delInboundClients(inboundSvc *InboundService, inboundId 
 		logger.Error("Load Old Data Error")
 		return false, err
 	}
+
+	// LUCX-HOOK: share-only sidecars keep clients in client_inbounds, not settings.
+	if shareOnlySidecar(oldInbound.Protocol) {
+		emails := make([]string, 0, len(recs))
+		for _, rec := range recs {
+			emails = append(emails, rec.Email)
+		}
+		return false, s.detachShareOnlyClient(inboundSvc, inboundId, emails, keepTraffic)
+	}
+	// END LUCX-HOOK
 
 	var settings map[string]any
 	if err := json.Unmarshal([]byte(oldInbound.Settings), &settings); err != nil {
@@ -152,7 +164,7 @@ func (s *ClientService) delInboundClients(inboundSvc *InboundService, inboundId 
 			}
 		}
 		var sharedErr error
-		sharedSet, sharedErr = inboundSvc.emailsUsedByOtherInbounds(removedEmails, inboundId)
+		sharedSet, sharedErr = inboundSvc.emailsUsedByOtherInbounds(db, removedEmails, inboundId)
 		if sharedErr != nil {
 			return false, sharedErr
 		}
@@ -202,7 +214,7 @@ func (s *ClientService) delInboundClients(inboundSvc *InboundService, inboundId 
 				}
 			}
 		}
-		if e := tx.Save(oldInbound).Error; e != nil {
+		if e := commitInboundClientSettings(tx, oldInbound, prevSettings); e != nil {
 			return e
 		}
 		detached := make([]string, 0, len(targets))
@@ -267,7 +279,7 @@ func (s *ClientService) delInboundClients(inboundSvc *InboundService, inboundId 
 		}
 	}
 	if nodePush && !nodePushFailed {
-		advancePushedInbound(nodeRt, prevSettings, oldInbound)
+		advancePushedInbound(nodeRt, prevSettings, string(newSettings), oldInbound)
 	}
 
 	return needRestart, nil
@@ -345,6 +357,9 @@ func (s *ClientService) AddInboundClient(inboundSvc *InboundService, data *model
 
 	clients, err := inboundSvc.GetClients(data)
 	if err != nil {
+		return false, err
+	}
+	if err := validateClientsRenewal(clients); err != nil {
 		return false, err
 	}
 
@@ -458,7 +473,7 @@ func (s *ClientService) AddInboundClient(inboundSvc *InboundService, data *model
 
 	var portCtx portConflictContext
 	if oldInbound.Protocol == model.AmneziaWG {
-		portCtx, err = inboundSvc.loadPortConflictContext(database.GetDB())
+		portCtx, err = inboundSvc.loadPortConflictContext(database.GetDB(), oldInbound.NodeID)
 		if err != nil {
 			return false, err
 		}
@@ -468,7 +483,7 @@ func (s *ClientService) AddInboundClient(inboundSvc *InboundService, data *model
 			return false, common.NewError("client email is required")
 		}
 		switch oldInbound.Protocol {
-		case "trojan":
+		case "trojan", "masque":
 			if client.Password == "" {
 				return false, common.NewError("empty client ID")
 			}
@@ -484,7 +499,7 @@ func (s *ClientService) AddInboundClient(inboundSvc *InboundService, data *model
 			if client.PublicKey == "" {
 				return false, common.NewError("wireguard client requires a key")
 			}
-		case "awg", "naive", "olcrtc", "qwdtt", "csqtt", "mieru", "trusttunnel", "anytls", "tproxy", "cover", "gateway":
+		case "awg", "naive", "olcrtc", "qwdtt", "csqtt", "openflux", "mieru", "trusttunnel", "anytls", "tproxy", "cover", "gateway":
 		case "mtproto":
 			if client.Secret == "" {
 				return false, common.NewError("mtproto client requires a secret")
@@ -525,6 +540,7 @@ func (s *ClientService) AddInboundClient(inboundSvc *InboundService, data *model
 	}
 
 	prevSettings := oldInbound.Settings
+	pushedSettings := prevSettings
 	if !shareOnlySidecar(oldInbound.Protocol) {
 		oldClients, _ := oldSettings["clients"].([]any)
 		oldClients = compactOrphans(database.GetDB(), oldClients)
@@ -534,7 +550,8 @@ func (s *ClientService) AddInboundClient(inboundSvc *InboundService, data *model
 		if err != nil {
 			return false, err
 		}
-		oldInbound.Settings = string(newSettings)
+		pushedSettings = string(newSettings)
+		oldInbound.Settings = pushedSettings
 	}
 
 	// From the stamped wire entries, not from clients: created_at / updated_at /
@@ -566,13 +583,13 @@ func (s *ClientService) AddInboundClient(inboundSvc *InboundService, data *model
 				crossAddrs = append(crossAddrs, addr)
 			}
 			for i := range clients {
-				if hit := wireguardAllowedIPsCollision(clients[i].AllowedIPs, crossAddrs); hit != "" {
-					return common.NewError("allowedIPs entry", hit, "is already used by a client on", crossUsed[hit])
+				if entry, taken := wireguardAllowedIPsOverlap(clients[i].AllowedIPs, crossAddrs); taken != "" {
+					return common.NewError("allowedIPs entry", entry, "overlaps", taken, "used by a client on", crossUsed[taken])
 				}
 			}
 		}
 		if portForwardProtocol(oldInbound.Protocol) {
-			txPortCtx, pErr := inboundSvc.loadPortConflictContext(tx)
+			txPortCtx, pErr := inboundSvc.loadPortConflictContext(tx, oldInbound.NodeID)
 			if pErr != nil {
 				return pErr
 			}
@@ -590,7 +607,7 @@ func (s *ClientService) AddInboundClient(inboundSvc *InboundService, data *model
 				return e
 			}
 		}
-		if e := tx.Save(oldInbound).Error; e != nil {
+		if e := commitInboundClientSettings(tx, oldInbound, prevSettings); e != nil {
 			return e
 		}
 		if err := s.ApplyInboundClientDelta(tx, oldInbound.Id, addedClients, nil); err != nil {
@@ -679,7 +696,7 @@ func (s *ClientService) AddInboundClient(inboundSvc *InboundService, data *model
 			}
 		}
 		if push {
-			advancePushedInbound(rt, prevSettings, oldInbound)
+			advancePushedInbound(rt, prevSettings, pushedSettings, oldInbound)
 		}
 	}
 
@@ -691,6 +708,9 @@ func (s *ClientService) UpdateInboundClient(inboundSvc *InboundService, data *mo
 
 	clients, err := inboundSvc.GetClients(data)
 	if err != nil {
+		return false, err
+	}
+	if err := validateClientsRenewal(clients); err != nil {
 		return false, err
 	}
 
@@ -716,16 +736,35 @@ func (s *ClientService) UpdateInboundClient(inboundSvc *InboundService, data *mo
 			return false, common.NewError("client email is required")
 		}
 		if txErr := runSerializedTx(func(tx *gorm.DB) error {
-			if err := s.ApplyInboundClientDelta(tx, oldInbound.Id, clients[:1], nil); err != nil {
+			newEmail := strings.TrimSpace(clients[0].Email)
+			var detachEmails []string
+			// A rename must move the one client record first: writing the link
+			// delta to the new email while the old row still holds the old one
+			// violates the unique email index instead of renaming (UNIQUE
+			// constraint failed: clients.email). Byte-level compare, like the
+			// generic branch below — case-only edits must rename too.
+			if len(oldEmail) > 0 && oldEmail != newEmail {
+				var renameTaken int64
+				if e := tx.Model(&model.ClientRecord{}).Where("email = ?", newEmail).Count(&renameTaken).Error; e != nil {
+					return e
+				}
+				if renameTaken == 0 {
+					if e := tx.Model(&model.ClientRecord{}).Where("email = ?", oldEmail).Update("email", newEmail).Error; e != nil {
+						return e
+					}
+				}
+				detachEmails = []string{oldEmail}
+			}
+			if err := s.ApplyInboundClientDelta(tx, oldInbound.Id, clients[:1], detachEmails); err != nil {
 				return err
 			}
-			// The settings branch below refreshes client_traffics through
-			// UpdateClientStat; this early return skipped it, so for a client
-			// living only on qWDTT/CSQTT/olcRTC/tproxy inbounds the deadline,
-			// quota and enable flag edited in the panel changed on the client
-			// record but never on the row the subscription header reads
+			// LUCX-FORK: the settings branch below refreshes client_traffics
+			// through UpdateClientStat; this early return skipped it, so for a
+			// client living only on qWDTT/CSQTT/olcRTC/tproxy inbounds the
+			// deadline, quota and enable flag edited in the panel changed on the
+			// client record but never on the row the subscription header reads
 			// (Subscription-Userinfo expire stayed at the old date).
-			if strings.EqualFold(oldEmail, clients[0].Email) {
+			if strings.EqualFold(oldEmail, newEmail) {
 				return inboundSvc.UpdateClientStat(tx, oldEmail, &clients[0])
 			}
 			return nil
@@ -743,13 +782,13 @@ func (s *ClientService) UpdateInboundClient(inboundSvc *InboundService, data *mo
 
 	newClientId := ""
 	switch oldInbound.Protocol {
-	case "trojan":
+	case "trojan", "masque":
 		newClientId = clients[0].Password
 	case "shadowsocks":
 		newClientId = clients[0].Email
 	case "hysteria":
 		newClientId = clients[0].Auth
-	case "wireguard", "amneziawg", "awg", "naive", "olcrtc", "qwdtt", "csqtt", "mieru", "trusttunnel", "anytls", "tproxy", "cover", "gateway":
+	case "wireguard", "amneziawg", "awg", "naive", "olcrtc", "qwdtt", "csqtt", "openflux", "mieru", "trusttunnel", "anytls", "tproxy", "cover", "gateway":
 		newClientId = clients[0].Email
 	case "mtproto":
 		newClientId = clients[0].Email
@@ -817,8 +856,8 @@ func (s *ClientService) UpdateInboundClient(inboundSvc *InboundService, data *mo
 					}
 					peers = append(peers, oldClients[i].AllowedIPs...)
 				}
-				if hit := wireguardAllowedIPsCollision(normalized, peers); hit != "" {
-					return false, common.NewError("wireguard: allowedIPs entry already used by another client:", hit)
+				if entry, taken := wireguardAllowedIPsOverlap(normalized, peers); taken != "" {
+					return false, common.NewError("wireguard: allowedIPs entry", entry, "overlaps", taken, "used by another client")
 				}
 				clients[0].AllowedIPs = normalized
 			}
@@ -836,7 +875,7 @@ func (s *ClientService) UpdateInboundClient(inboundSvc *InboundService, data *mo
 		}
 	}
 	if portForwardProtocol(oldInbound.Protocol) {
-		portCtx, err := inboundSvc.loadPortConflictContext(database.GetDB())
+		portCtx, err := inboundSvc.loadPortConflictContext(database.GetDB(), oldInbound.NodeID)
 		if err != nil {
 			return false, err
 		}
@@ -973,7 +1012,7 @@ func (s *ClientService) UpdateInboundClient(inboundSvc *InboundService, data *mo
 		// Same re-check-inside-the-writer rule as AddInboundClient (#6225):
 		// the pre-tx pass can race a concurrent writer on another inbound.
 		if portForwardProtocol(oldInbound.Protocol) {
-			txPortCtx, pErr := inboundSvc.loadPortConflictContext(tx)
+			txPortCtx, pErr := inboundSvc.loadPortConflictContext(tx, oldInbound.NodeID)
 			if pErr != nil {
 				return pErr
 			}
@@ -998,7 +1037,7 @@ func (s *ClientService) UpdateInboundClient(inboundSvc *InboundService, data *mo
 						return e
 					}
 				} else {
-					stillUsed, sErr := inboundSvc.emailUsedByOtherInbounds(oldEmail, data.Id)
+					stillUsed, sErr := inboundSvc.emailUsedByOtherInbounds(tx, oldEmail, data.Id)
 					if sErr != nil {
 						return sErr
 					}
@@ -1020,7 +1059,7 @@ func (s *ClientService) UpdateInboundClient(inboundSvc *InboundService, data *mo
 				}
 			}
 		} else {
-			stillUsed, sErr := inboundSvc.emailUsedByOtherInbounds(oldEmail, data.Id)
+			stillUsed, sErr := inboundSvc.emailUsedByOtherInbounds(tx, oldEmail, data.Id)
 			if sErr != nil {
 				return sErr
 			}
@@ -1034,7 +1073,7 @@ func (s *ClientService) UpdateInboundClient(inboundSvc *InboundService, data *mo
 			}
 		}
 
-		if e := tx.Save(oldInbound).Error; e != nil {
+		if e := commitInboundClientSettings(tx, oldInbound, prevSettings); e != nil {
 			return e
 		}
 		// Rename the client record in the same transaction as the settings JSON
@@ -1132,7 +1171,7 @@ func (s *ClientService) UpdateInboundClient(inboundSvc *InboundService, data *mo
 			if err1 != nil {
 				logger.Warning("Error in updating client on", rt.Name(), ":", err1)
 			} else {
-				advancePushedInbound(rt, prevSettings, oldInbound)
+				advancePushedInbound(rt, prevSettings, string(newSettings), oldInbound)
 			}
 		}
 	} else {
@@ -1151,6 +1190,12 @@ func (s *ClientService) DelInboundClientByEmail(inboundSvc *InboundService, inbo
 		logger.Error("Load Old Data Error")
 		return false, err
 	}
+
+	// LUCX-HOOK: share-only sidecars keep clients in client_inbounds, not settings.
+	if shareOnlySidecar(oldInbound.Protocol) {
+		return false, s.detachShareOnlyClient(inboundSvc, inboundId, []string{email}, keepTraffic)
+	}
+	// END LUCX-HOOK
 
 	var settings map[string]any
 	if err := json.Unmarshal([]byte(oldInbound.Settings), &settings); err != nil {
@@ -1208,7 +1253,7 @@ func (s *ClientService) DelInboundClientByEmail(inboundSvc *InboundService, inbo
 	}
 	// END LUCX-HOOK
 
-	emailShared, err := inboundSvc.emailUsedByOtherInbounds(email, inboundId)
+	emailShared, err := inboundSvc.emailUsedByOtherInbounds(db, email, inboundId)
 	if err != nil {
 		return false, err
 	}
@@ -1254,7 +1299,7 @@ func (s *ClientService) DelInboundClientByEmail(inboundSvc *InboundService, inbo
 				return e
 			}
 		}
-		if e := tx.Save(oldInbound).Error; e != nil {
+		if e := commitInboundClientSettings(tx, oldInbound, prevSettings); e != nil {
 			return e
 		}
 		if err := s.ApplyInboundClientDelta(tx, inboundId, nil, []string{email}); err != nil {
@@ -1320,7 +1365,7 @@ func (s *ClientService) DelInboundClientByEmail(inboundSvc *InboundService, inbo
 				if err1 != nil {
 					logger.Warning("Error in deleting client on", rt.Name(), ":", err1)
 				} else {
-					advancePushedInbound(rt, prevSettings, oldInbound)
+					advancePushedInbound(rt, prevSettings, string(newSettings), oldInbound)
 				}
 			}
 		}

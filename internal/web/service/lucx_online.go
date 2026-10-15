@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
+	"github.com/mhsanaei/3x-ui/v3/internal/logger"
 	"github.com/mhsanaei/3x-ui/v3/internal/xray"
 
 	"gorm.io/gorm"
@@ -28,7 +29,7 @@ func onlineProcess() *xray.Process {
 }
 
 func shareOnlySidecar(p model.Protocol) bool {
-	return p == model.Qwdtt || p == model.Csqtt || p == model.Olcrtc || p == model.Tproxy
+	return p == model.Qwdtt || p == model.Csqtt || p == model.Olcrtc || p == model.Openflux || p == model.Tproxy
 }
 
 type shareOnlySlimClient struct {
@@ -95,4 +96,46 @@ func mergeShareOnlySlimClients(settings string, clients []shareOnlySlimClient) s
 		return settings
 	}
 	return string(out)
+}
+
+// detachShareOnlyClient removes emails from a share-only sidecar inbound:
+// the client_inbounds links only, plus the stat/IP purge for emails that
+// survive on no other inbound. These cores authenticate one shared secret,
+// not a per-client list, so there is no settings.clients blob to rewrite and
+// no Xray user to remove — the tunnel reconcile job owns the runtime. The
+// caller holds the inbound lock (lockInbound already taken on every path
+// that routes here).
+func (s *ClientService) detachShareOnlyClient(inboundSvc *InboundService, inboundId int, emails []string, keepTraffic bool) error {
+	clean := make([]string, 0, len(emails))
+	for _, e := range emails {
+		if e = strings.TrimSpace(e); e != "" {
+			clean = append(clean, e)
+		}
+	}
+	if len(clean) == 0 {
+		return nil
+	}
+
+	return runSerializedTx(func(tx *gorm.DB) error {
+		if !keepTraffic {
+			shared, err := inboundSvc.emailsUsedByOtherInbounds(tx, clean, inboundId)
+			if err != nil {
+				return err
+			}
+			for _, email := range clean {
+				if shared[strings.ToLower(email)] {
+					continue
+				}
+				if e := inboundSvc.DelClientIPs(tx, email); e != nil {
+					logger.Error("Error in delete client IPs")
+					return e
+				}
+				if e := inboundSvc.DelClientStat(tx, email); e != nil {
+					logger.Error("Delete stats Data Error")
+					return e
+				}
+			}
+		}
+		return s.ApplyInboundClientDelta(tx, inboundId, nil, clean)
+	})
 }

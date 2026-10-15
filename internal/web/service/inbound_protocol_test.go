@@ -26,12 +26,11 @@ func TestInboundCanEnableTlsFlow(t *testing.T) {
 		{"vmess tcp tls", string(model.VMESS), `{"network":"tcp","security":"tls"}`, "", false},
 		{"empty stream", string(model.VLESS), "", "", false},
 
-		// vlessenc is gated to XHTTP only. TCP without tls/reality is NOT
-		// Vision-capable even with vlessenc set — the combination only works on
-		// XHTTP in practice.
-		{"vless tcp vlessenc not capable", string(model.VLESS), `{"network":"tcp","security":"none"}`, `{"decryption":"mlkem768x25519plus.native.600s.mMFxPe7lz5xoq2qBk22cQYefu5fpc_2dGR8lMOKem0E","encryption":"mlkem768x25519plus.native.0rtt.hT4AY_tPWY9NVuKR3BIXxXq6zx9DqN2X86QPYW09XEM"}`, false},
-		// ws is a framed transport — vlessenc never enables Vision there.
-		{"vless ws vlessenc still off", string(model.VLESS), `{"network":"ws","security":"none"}`, `{"encryption":"` + vlessEncValue + `"}`, false},
+		// xray-core runs Vision inside VLESS encryption on any transport (encryption.CommonConn).
+		{"vless raw vlessenc", string(model.VLESS), `{"network":"tcp","security":"none"}`, `{"decryption":"mlkem768x25519plus.native.600s.mMFxPe7lz5xoq2qBk22cQYefu5fpc_2dGR8lMOKem0E","encryption":"mlkem768x25519plus.native.0rtt.hT4AY_tPWY9NVuKR3BIXxXq6zx9DqN2X86QPYW09XEM"}`, true},
+		{"vless ws vlessenc", string(model.VLESS), `{"network":"ws","security":"none"}`, `{"encryption":"` + vlessEncValue + `"}`, true},
+		{"vless xdrive vlessenc", string(model.VLESS), `{"network":"xdrive","security":"none"}`, `{"decryption":"` + vlessEncValue + `"}`, true},
+		{"vless xdrive no encryption", string(model.VLESS), `{"network":"xdrive","security":"none"}`, `{"decryption":"none"}`, false},
 
 		// XHTTP + VLESS encryption (the #5157 case).
 		{"vless xhttp vlessenc", string(model.VLESS), `{"network":"xhttp","security":"none"}`, `{"encryption":"` + vlessEncValue + `"}`, true},
@@ -93,19 +92,19 @@ func TestInboundCanHostFallbacks_StaysTcpOnly(t *testing.T) {
 // frontend/src/pages/inbounds/form/InboundFormModal.tsx -- keep both lists
 // in sync if a protocol's node-eligibility ever changes.
 func TestIsNodeEligibleProtocol(t *testing.T) {
-	eligible := []model.Protocol{model.VLESS, model.VMESS, model.Trojan, model.Shadowsocks, model.Hysteria, model.WireGuard}
+	eligible := []model.Protocol{model.VLESS, model.VMESS, model.Trojan, model.Shadowsocks, model.Hysteria, model.WireGuard, model.MTProto, model.AmneziaWG, model.TUIC}
 	// LUCX-HOOK: LucX sidecar protocols are node-eligible (lucx.114).
-	eligible = append(eligible, model.AWG, model.Naive, model.Olcrtc, model.Qwdtt, model.Mieru, model.TrustTunnel, model.Anytls, model.Tproxy, model.Cover, model.Gateway)
+	eligible = append(eligible, model.AWG, model.Naive, model.Olcrtc, model.Qwdtt, model.Openflux, model.Mieru, model.TrustTunnel, model.Anytls, model.Tproxy, model.Cover, model.Gateway)
 	// END LUCX-HOOK
 	for _, p := range eligible {
-		if !isNodeEligibleProtocol(p) {
-			t.Errorf("isNodeEligibleProtocol(%q) = false, want true", p)
+		if !nodeEligibleProtocols[p] {
+			t.Errorf("nodeEligibleProtocols[%q] = false, want true", p)
 		}
 	}
-	ineligible := []model.Protocol{model.MTProto, model.AmneziaWG, model.Mixed, model.HTTP, model.Tunnel}
+	ineligible := []model.Protocol{model.Mixed, model.HTTP, model.Tunnel}
 	for _, p := range ineligible {
-		if isNodeEligibleProtocol(p) {
-			t.Errorf("isNodeEligibleProtocol(%q) = true, want false", p)
+		if nodeEligibleProtocols[p] {
+			t.Errorf("nodeEligibleProtocols[%q] = true, want false", p)
 		}
 	}
 }

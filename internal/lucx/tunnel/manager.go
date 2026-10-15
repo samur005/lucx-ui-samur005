@@ -263,6 +263,9 @@ func (m *Manager) Ensure(inst Instance) error {
 		if fp == mc.fp {
 			return nil
 		}
+		if mc.fp != "" {
+			logger.Infof("tunnel: %s config changed, restarting", key)
+		}
 		if err := mc.proc.Stop(); err != nil {
 			logger.Warningf("tunnel: stop before restart of %s failed: %v", key, err)
 		}
@@ -366,6 +369,8 @@ func removeManagedFiles(key string) {
 		core = TrustTunnelClient
 	case strings.HasPrefix(key, "olcrtc-"):
 		core = Olcrtc
+	case strings.HasPrefix(key, "openflux-"):
+		core = Openflux
 	default:
 		return
 	}
@@ -380,6 +385,9 @@ func removeManagedFiles(key string) {
 	if core == Tproxy {
 		paths = append(paths, filepath.Join(workDir(), key+"-profiles.json"))
 	}
+	if core == Openflux {
+		paths = append(paths, filepath.Join(workDir(), key+"-secret.txt"))
+	}
 	paths = append(paths, dataDirFor(key, core))
 	for _, p := range paths {
 		if err := os.RemoveAll(p); err != nil && !os.IsNotExist(err) {
@@ -389,7 +397,7 @@ func removeManagedFiles(key string) {
 }
 
 func isMultiInstanceKey(key string) bool {
-	for _, p := range []string{"trusttunnel-", "mieru-", "naive-", "olcrtc-", "anytls-", "tproxycaddy-", "cover-", "tproxy-", "mtproxy-", "naiveout-", "mieruout-", "ttout-"} {
+	for _, p := range []string{"trusttunnel-", "mieru-", "naive-", "olcrtc-", "openflux-", "anytls-", "tproxycaddy-", "cover-", "tproxy-", "mtproxy-", "naiveout-", "mieruout-", "ttout-"} {
 		if strings.HasPrefix(key, p) && len(key) > len(p) {
 			return true
 		}
@@ -653,6 +661,10 @@ func (m *Manager) ReconcileOlcrtc(want []Instance) {
 	m.ReconcileWanted(Olcrtc, "olcrtc-", string(Olcrtc), want)
 }
 
+func (m *Manager) ReconcileOpenflux(want []Instance) {
+	m.ReconcileWanted(Openflux, "openflux-", string(Openflux), want)
+}
+
 // ReconcileMieru drives every desired mieru inbound instance.
 func (m *Manager) ReconcileMieru(want []Instance) {
 	m.ReconcileWanted(Mieru, "mieru-", string(Mieru), want)
@@ -822,6 +834,7 @@ func (m *Manager) start(inst Instance, mc *managed) error {
 		return fmt.Errorf("tunnel: no start args for core %q", inst.Core)
 	}
 	env := append(os.Environ(), "XDG_DATA_HOME="+absPath(dataDirFor(key, inst.Core)))
+	env = fillEmptyHome(env, absPath(dataDirFor(key, inst.Core)))
 	if inst.Core == Mieru {
 		env = append(env,
 			"MITA_CONFIG_JSON_FILE="+absPath(cfgPath),
@@ -837,6 +850,42 @@ func (m *Manager) start(inst Instance, mc *managed) error {
 		return fmt.Errorf("tunnel: start %s: %w", key, err)
 	}
 	return nil
+}
+
+func fillEmptyHome(env []string, home string) []string {
+	home = strings.TrimSpace(home)
+	if home == "" {
+		return env
+	}
+	hasHome, hasXDG := false, false
+	out := make([]string, 0, len(env)+2)
+	for _, e := range env {
+		k, v, ok := strings.Cut(e, "=")
+		if !ok {
+			out = append(out, e)
+			continue
+		}
+		switch k {
+		case "HOME":
+			if strings.TrimSpace(v) == "" {
+				continue
+			}
+			hasHome = true
+		case "XDG_CONFIG_HOME":
+			if strings.TrimSpace(v) == "" {
+				continue
+			}
+			hasXDG = true
+		}
+		out = append(out, e)
+	}
+	if !hasHome {
+		out = append(out, "HOME="+home)
+	}
+	if !hasXDG && !hasHome {
+		out = append(out, "XDG_CONFIG_HOME="+home)
+	}
+	return out
 }
 
 func extraArgsSafe(extra string) ([]string, error) {

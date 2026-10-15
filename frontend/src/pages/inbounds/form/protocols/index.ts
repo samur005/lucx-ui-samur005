@@ -11,6 +11,7 @@ export { default as NaiveFields } from './naive'; // LUCX-HOOK: NaiveProxy
 export { default as OlcrtcFields } from './olcrtc'; // LUCX-HOOK: olcRTC
 export { default as QwdttFields } from './qwdtt'; // LUCX-HOOK: qWDTT
 export { default as CsqttFields } from './csqtt'; // LUCX-HOOK: CSQTT
+export { default as OpenfluxFields } from './openflux'; // LUCX-HOOK: OpenFlux
 export { default as MieruFields } from './mieru'; // LUCX-HOOK: mieru
 export { default as TrustTunnelFields } from './trusttunnel'; // LUCX-HOOK: TrustTunnel
 export { default as AnytlsFields } from './anytls'; // LUCX-HOOK: AnyTLS
@@ -20,3 +21,4 @@ export { default as GatewayFields } from './gateway'; // LUCX-HOOK: nginx SNI mu
 export { default as VlessFields } from './vless';
 export { default as AmneziawgFields } from './amneziawg';
 export { default as TuicFields } from './tuic';
+export { default as MasqueStreamFields, MasqueSettingsFields } from './masque';

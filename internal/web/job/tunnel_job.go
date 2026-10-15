@@ -349,6 +349,7 @@ func (j *TunnelJob) collectAnytlsTraffic() {
 		return
 	}
 	var targets []tunnel.AnytlsScrapeTarget
+	routedTags := map[string]bool{}
 	emailsByTag := map[string][]string{}
 	for _, ib := range inbounds {
 		if ib == nil || ib.Protocol != model.Anytls || !ib.Enable || ib.NodeID != nil {
@@ -361,6 +362,11 @@ func (j *TunnelJob) collectAnytlsTraffic() {
 		cfg, ok := tunnel.AnytlsConfigFromInbound(ib)
 		if !ok {
 			continue
+		}
+		// Routed inbounds are already metered inbound>>>tag by the injected
+		// SOCKS bridge (injectAnytlsEgress); scraping them too double-counts.
+		if cfg.RouteThroughXray && cfg.RouteXrayPort > 0 {
+			routedTags[tag] = true
 		}
 		emailsByTag[tag] = anytlsEmailsForInbound(ib)
 		targets = append(targets, tunnel.AnytlsScrapeTarget{
@@ -382,7 +388,7 @@ func (j *TunnelJob) collectAnytlsTraffic() {
 		if live {
 			liveTags = append(liveTags, d.Tag)
 		}
-		if d.Up > 0 || d.Down > 0 {
+		if !routedTags[d.Tag] && (d.Up > 0 || d.Down > 0) {
 			traffics = append(traffics, &xray.Traffic{
 				IsInbound: true,
 				Tag:       d.Tag,
@@ -423,6 +429,7 @@ func (j *TunnelJob) collectOlcrtcTraffic() {
 		return
 	}
 	var snaps []tunnel.SidecarTraffic
+	routedTags := map[string]bool{}
 	emailsByTag := map[string][]string{}
 	for _, ib := range inbounds {
 		if ib == nil || ib.Protocol != model.Olcrtc || !ib.Enable || ib.NodeID != nil {
@@ -432,10 +439,15 @@ func (j *TunnelJob) collectOlcrtcTraffic() {
 		if tag == "" {
 			continue
 		}
+		if cfg, ok := tunnel.OlcrtcConfigFromInbound(ib); ok && cfg.RouteThroughXray && cfg.RouteXrayPort > 0 {
+			// Routed inbounds are already metered inbound>>>tag via the SOCKS
+			// bridge (injectOlcrtcEgress); collecting them again doubles them.
+			routedTags[tag] = true
+		}
 		emailsByTag[tag] = anytlsEmailsForInbound(ib)
 		snaps = append(snaps, tunnel.GetManager().CollectOlcrtcTraffic(tunnel.OlcrtcKey(ib.Id), tag))
 	}
-	j.commitSidecarScrape("olcrtc", snaps, emailsByTag)
+	j.commitSidecarScrape("olcrtc", snaps, emailsByTag, routedTags)
 }
 
 func (j *TunnelJob) collectQwdttTraffic() {
@@ -445,6 +457,7 @@ func (j *TunnelJob) collectQwdttTraffic() {
 		return
 	}
 	var snaps []tunnel.SidecarTraffic
+	routedTags := map[string]bool{}
 	emailsByTag := map[string][]string{}
 	// Per-client credentials: users to register per sidecar state dir, and the
 	// password -> email maps used to read per-client counters back.
@@ -462,6 +475,12 @@ func (j *TunnelJob) collectQwdttTraffic() {
 		tag := strings.TrimSpace(ib.Tag)
 		if tag == "" {
 			continue
+		}
+		if cfg, ok := tunnel.QwdttConfigFromInbound(ib); ok && cfg.RouteThroughXray {
+			// Routed inbounds are already metered inbound>>>tag via the TUN
+			// bridge (injectQwdttEgress); the wdtt0/wdttraw0 scrape carries
+			// the same bytes.
+			routedTags[tag] = true
 		}
 		clients, cerr := (&service.ClientService{}).ListForInbound(database.GetDB(), ib.Id)
 		emails := make([]string, 0, len(clients))
@@ -503,7 +522,7 @@ func (j *TunnelJob) collectQwdttTraffic() {
 			targets = append(targets, qwdttTarget{tag: tag, dir: dir, byPassword: byPassword})
 		}
 	}
-	j.commitSidecarScrape("qwdtt", snaps, emailsByTag)
+	j.commitSidecarScrape("qwdtt", snaps, emailsByTag, routedTags)
 	pid := tunnel.GetManager().PidOf(tunnel.QwdttKey)
 	for dir, users := range usersByDir {
 		if changed, err := tunnel.SyncQwdttUsers(dir, pid, users, complete); err != nil {
@@ -554,6 +573,7 @@ func (j *TunnelJob) collectTproxyTraffic() {
 		return
 	}
 	var snaps []tunnel.SidecarTraffic
+	routedTags := map[string]bool{}
 	emailsByTag := map[string][]string{}
 	for _, ib := range inbounds {
 		if ib == nil || ib.Protocol != model.Tproxy || !ib.Enable || ib.NodeID != nil {
@@ -563,13 +583,19 @@ func (j *TunnelJob) collectTproxyTraffic() {
 		if tag == "" {
 			continue
 		}
+		if cfg, ok := tunnel.TproxyConfigFromInbound(ib); ok && cfg.RouteThroughXray && cfg.RouteXrayPort > 0 {
+			// Routed inbounds are already metered inbound>>>tag via the SOCKS
+			// bridge (injectTproxyEgress); the /proc io scrape carries the
+			// same bytes.
+			routedTags[tag] = true
+		}
 		emailsByTag[tag] = anytlsEmailsForInbound(ib)
 		snaps = append(snaps, tunnel.GetManager().CollectTproxyTraffic(tunnel.TproxyKey(ib.Id), tag))
 	}
-	j.commitSidecarScrape("tproxy", snaps, emailsByTag)
+	j.commitSidecarScrape("tproxy", snaps, emailsByTag, routedTags)
 }
 
-func (j *TunnelJob) commitSidecarScrape(name string, snaps []tunnel.SidecarTraffic, emailsByTag map[string][]string) {
+func (j *TunnelJob) commitSidecarScrape(name string, snaps []tunnel.SidecarTraffic, emailsByTag map[string][]string, routedTags map[string]bool) {
 	if len(snaps) == 0 {
 		return
 	}
@@ -582,7 +608,7 @@ func (j *TunnelJob) commitSidecarScrape(name string, snaps []tunnel.SidecarTraff
 		if live {
 			liveTags = append(liveTags, d.Tag)
 		}
-		if d.Up > 0 || d.Down > 0 {
+		if !routedTags[d.Tag] && (d.Up > 0 || d.Down > 0) {
 			traffics = append(traffics, &xray.Traffic{
 				IsInbound: true,
 				Tag:       d.Tag,

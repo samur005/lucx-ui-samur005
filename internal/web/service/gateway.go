@@ -74,7 +74,7 @@ func (s *InboundService) GatewayPreview(gatewayID int, publicHost string) (*Gate
 		Rows:       rows,
 		MaskedIds:  masked,
 		UFW:        cfg.UFW,
-		UFWAllow:   tunnel.GatewayUFWAllow(web, sub, tunnel.SSHDPort(), rows, ufwDefaultSelected(rows), cfg.HidePanel),
+		UFWAllow:   tunnel.GatewayUFWAllow(web, sub, tunnel.SSHDPort(), rows, ufwDefaultMoved(rows), cfg.HidePanel),
 		HidePanel:  cfg.HidePanel,
 		WebPort:    web,
 		WebTLS:     strings.TrimSpace(cert) != "",
@@ -310,7 +310,22 @@ func (s *InboundService) GatewayApply(gatewayID int, req GatewayApplyRequest) er
 	s.ensureGatewayRuntime(gw, others)
 	if req.UFW {
 		web, sub := gatewayExtraPorts()
-		if err := tunnel.ApplyUFW(tunnel.GatewayUFWAllow(web, sub, tunnel.SSHDPort(), rows, selected, req.HidePanel)); err != nil {
+		ssh := tunnel.SSHDPort()
+		// Same set as the snapshot loop's move condition above plus explicitly
+		// hidden naive: every inbound whose port leaves the public internet.
+		// Before lucx.297 only "selected" rows closed their ports, so proto-
+		// cols hidden inside the site (and hideNaive) kept their old allow
+		// rules — ufw status showed the whole stack public with masking on.
+		moved := map[int]bool{}
+		for _, row := range rows {
+			if (selected[row.InboundID] && row.Class != tunnel.ClassSkip && !inside[row.InboundID]) ||
+				inside[row.InboundID] || hideNaiveID(req.HideNaive, row.InboundID) {
+				moved[row.InboundID] = true
+			}
+		}
+		allows := tunnel.GatewayUFWAllow(web, sub, ssh, rows, moved, req.HidePanel)
+		closePorts := tunnel.GatewayUFWClose(web, sub, ssh, rows, moved, req.HidePanel)
+		if err := tunnel.ApplyUFW(allows, closePorts); err != nil {
 			return common.NewError("gateway applied, ufw:", err)
 		}
 	}
@@ -327,7 +342,11 @@ func (s *InboundService) GatewayRevert(gatewayID int) error {
 		return common.NewError("gateway: nothing to revert")
 	}
 	if cfg.UFW {
-		_ = tunnel.RevertUFW(cfg.UFWWasActive)
+		web, sub := gatewayExtraPorts()
+		restore := tunnel.GatewayUFWRestore(web, sub, cfg.Snapshot, cfg.HidePanel)
+		if err := tunnel.RevertUFW(cfg.UFWWasActive, restore); err != nil {
+			logger.Warningf("gateway: ufw revert: %v", err)
+		}
 	}
 	tunnel.GetManager().Remove(tunnel.GatewayKey(gw.Id))
 	db := database.GetDB()
@@ -438,7 +457,7 @@ func gatewayExtraPorts() (web, sub int) {
 	return
 }
 
-func ufwDefaultSelected(rows []tunnel.PreviewRow) map[int]bool {
+func ufwDefaultMoved(rows []tunnel.PreviewRow) map[int]bool {
 	m := map[int]bool{}
 	for _, r := range rows {
 		if r.Class != tunnel.ClassSkip {

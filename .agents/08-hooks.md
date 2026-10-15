@@ -23,6 +23,8 @@ i18n: extra keys in all 13 `internal/web/translation/*.json` have **no** HOOK. D
 
 | Where | Must keep |
 |---|---|
+| `internal/web/service/client_link.go` (+ upstream helpers) | tunnel sets (`isTunnel`, `clientsOnLowerTunnel`) include **`model.AWG` (kernel "awg")**, not only upstream's `WireGuard`/`AmneziaWG`; `keepLinkOwnedFields` restore: a **blank `before` field is not ownership** — upper-tunnel attach mints survive (lucx.299, v3.10.2) |
+|---|---|
 | `internal/sub/service.go` `getInboundsBySubId` | lucx protocols in the SQL `IN` list |
 | `internal/sub/service.go` `ResolveRequest` | never use `X-Real-IP` as share host |
 | `internal/sub/service.go` `amneziaWGConfigText` | always emit `S3`/`S4` (zero is real); drop unportable I-fields |
@@ -34,6 +36,7 @@ i18n: extra keys in all 13 `internal/web/translation/*.json` have **no** HOOK. D
 | `frontend/.../qr/QrPanel.tsx` | Happ QR cutoff **2953**, not 2000 (no HOOK) |
 | `frontend/.../clients/ClientInfoModal.tsx` | kernel AWG ConfigBlock (download .conf), not only ClientQrModal |
 | `install.sh` / `update.sh` after fail2ban | `bash bin/install-awg-module.sh` (lost in v3.8 overlay, lucx.248) |
+| `x-ui.sh` / `install.sh` acme `--issue` | `LUCX_ACME_LISTEN_PORT=` prefix + `"${LUCX_ACME_ARGS[@]}"` after `--httpport`; upstream port prompt stays as the `else` branch |
 
 ---
 
@@ -43,14 +46,14 @@ i18n: extra keys in all 13 `internal/web/translation/*.json` have **no** HOOK. D
 
 | File | Why |
 |---|---|
-| `install.sh` | fork URLs, Yandex geo, geo before first start, AWG after fail2ban |
-| `x-ui.sh` | install-source, RoscomVPN geo, AWG module menu |
-| `DockerInit.sh` | RoscomVPN geo |
+| `install.sh` | fork URLs, Yandex geo, geo before first start, AWG after fail2ban, ACME port prompt + `lucx-acme.sh migrate` |
+| `x-ui.sh` | install-source, RoscomVPN geo, AWG module menu, ACME port prompt, migrate on renew, restore on uninstall |
+| `DockerInit.sh` | RoscomVPN geo, `bin/lucx-acme.sh` into the image |
 | `Dockerfile` | LucX image |
 | `docker-compose.yml` | GHCR |
 | `.github/FUNDING.yml` | donations to LucX author |
 | `.github/workflows/docker.yml` | GHCR, no Docker Hub, amd64+arm64 |
-| `.github/workflows/release.yml` | lucx tag suffix, slim tarball, sidecars, arm64, stable |
+| `.github/workflows/release.yml` | lucx tag suffix, slim tarball, sidecars, arm64, stable, `bin/lucx-acme.sh` |
 | `.github/workflows/mutation.yml` | mutate LucX packages only |
 
 ### Go
@@ -92,6 +95,7 @@ i18n: extra keys in all 13 `internal/web/translation/*.json` have **no** HOOK. D
 | `internal/web/service/node.go` + `node_contract.go` | lucx node |
 | `internal/web/service/port_conflict.go` | lucx transports |
 | `internal/web/service/panel/panel.go` + `panel_test.go` | release notes / version |
+| `internal/web/service/panel/sponsor.go` | fork sponsor list URL (`AlexeyLCP/lucx-ui` raw) |
 | `internal/web/service/tgbot/tgbot_client.go` + `tgbot_send.go` | lucx bot |
 
 ### Frontend (HOOK)
@@ -138,7 +142,7 @@ Origin twins. Merge taking origin deletes these with **no count drop**. Re-apply
 
 | File | Why |
 |---|---|
-| `update.sh` | `AlexeyLCP/lucx-ui` URLs, sha256 sidecar, AWG after fail2ban |
+| `update.sh` | `AlexeyLCP/lucx-ui` URLs, sha256 sidecar, AWG after fail2ban, `lucx-acme.sh migrate` (HOOK) |
 | `.github/workflows/ci.yml` | lucx CI bits |
 | `.github/workflows/smoke.yml` | lucx smoke |
 | `.github/dependabot.yml` | lucx ignore/grouping |
@@ -196,6 +200,7 @@ Keep the directory. Origin will not have these.
 | Dir / file | What |
 |---|---|
 | `internal/awg/` | kernel AWG sidecar |
+| `internal/awg/peer_routes{,_linux,_other,_test}.go` | peer LAN routes (issue #126) |
 | `internal/lucx/` | tunnel sidecars, geodata, parser |
 | `internal/database/migrate_awg*.go` `migrate_geodata.go` `migrate_naive_inbound.go` `migrate_tunnel_*.go` `repair_tunnel_fields.go` | LucX migrations |
 | `internal/database/model/awg_outbound.go` `sidecar_outbound.go` | LucX tables |
@@ -213,11 +218,12 @@ Keep the directory. Origin will not have these.
 | `frontend/src/api/{awg-import,awg-outbounds,sidecar-outbounds,tunnels}.ts` | lucx API |
 | `frontend/src/schemas/{awg-*,tunnel,sidecar-outbound}.ts` `protocols/inbound/{awg,naive,…}.ts` | lucx zod |
 | `frontend/src/test/awg-*.ts*` `qwdtt-*.ts` `csqtt-*.ts` `vpnuri.test.ts` `sub-*.ts` `cores-*.tsx` | lucx tests |
-| `bin/` | install-awg, check-lucx, pack-sidecars, sourcecraft |
+| `bin/` | install-awg, check-lucx, pack-sidecars, sourcecraft, lucx-acme (ACME on loopback, :80 forwarded) |
 | `third_party/sidecars/` `third_party/patches/` | sidecar blobs |
 | `.github/workflows/upstream-watch.yml` | watch origin releases |
 | `.sourcecraft/` | Yandex CI |
 | `.agents/` `docs/progress.md` `docs/LICENSING.md` | fork docs |
+| `sponsors/` | panel sponsor list (Boosty supporters), fed to `panel/sponsor.go` |
 | `LICENSE-PolyForm-Noncommercial.txt` | LucX license |
 
 PolyForm vs GPL split: Rule 10 / `docs/LICENSING.md`.
