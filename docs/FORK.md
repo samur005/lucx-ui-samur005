@@ -129,7 +129,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/samur005/lucx-ui-samur005/fe
 
 1. ставит пакеты (`curl git tar ca-certificates build-essential xz-utils iproute2`);
 2. клонирует форк в `/usr/local/src/lucx-ui-samur005` (если каталог уже есть — сохраняет локальные правки в `git stash` и делает `git reset --hard origin/<ветка>`);
-3. ставит Go в `/usr/local/go` (пропускает, если там уже Go ≥ нужной версии; версия берётся максимальной из `GO_VER` и `go.mod`) и Node.js в `/usr/local/lib/nodejs` (пропускает, если уже есть Node ≥ 22.12 с npm), при необходимости прописывает `PATH` в `/etc/profile.d/go.sh` и `nodejs.sh` (если PATH уже прописан в другом файле `/etc/profile.d` — не трогает);
+3. ставит Go в `/usr/local/go` (пропускает, если там уже Go ≥ нужной версии; версия берётся максимальной из `GO_VER` и `go.mod`) и Node.js в `/usr/local/lib/nodejs` (пропускает, если уже есть Node ≥ 26 с npm ≥ 11), при необходимости прописывает `PATH` в `/etc/profile.d/go.sh` и `nodejs.sh` (если PATH уже прописан в другом файле `/etc/profile.d` — не трогает);
 4. **сначала собирает** frontend и Go-бинарник в `/usr/local/src/lucx-ui-samur005/.install-fork/x-ui` — если сборка упала, скрипт выходит с ошибкой и **ничего не трогает** (ни сервис, ни текущий бинарник);
 5. если панели ещё нет (`/usr/local/x-ui/x-ui` + unit `x-ui`) — запускает стоковый `install.sh` AlexeyLCP (интерактивный: вопросы про порт/SSL, в конце URL, логин и пароль — **сохраните их**); если панель уже стоит — этот шаг пропускается;
 6. останавливает `x-ui`, делает бэкап `/usr/local/x-ui/x-ui.bak-<дата>`, ставит бинарник форка, запускает и проверяет `systemctl is-active x-ui` (если не поднялся — автоматически откатывает на бэкап);
@@ -147,7 +147,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/samur005/lucx-ui-samur005/fe
 | `LUCX_BRANCH` | `feat/native-vk-hash-generator` | ветка для сборки (после merge PR #1 — `main`) |
 | `LUCX_SRC` | `/usr/local/src/lucx-ui-samur005` | каталог с исходниками |
 | `GO_VER` | `1.27.1` | минимальная версия Go (если `go.mod` требует больше — ставится версия из `go.mod`) |
-| `NODE_VER` | `24.20.0` | какую версию Node ставить, если подходящей (≥ 22.12) нет |
+| `NODE_VER` | `26.12.0` | какую версию Node ставить, если подходящей (≥ 26) нет |
 | `LUCX_SKIP_SERVICE` | `0` | `1` — только сборка (без стокового install.sh, systemd, замены бинарника и записи в `/etc/profile.d`) |
 | `LUCX_UFW_OPEN` | `0` | `1` — при активном `ufw` открыть публичные порты `x-ui`/xray |
 | `LUCX_ALLOW_REBOOT` | `0` | `1` — не перехватывать перезагрузку стокового install.sh |
@@ -163,7 +163,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/samur005/lucx-ui-samur005/fe
 
 Пока открыт [PR #1](https://github.com/samur005/lucx-ui-samur005/pull/1) — ветка `feat/native-vk-hash-generator`. После merge в `main` замените имя ветки на `main` во всех командах ниже.
 
-**Требования для сборки:** Go **1.27.1+** (`go.mod`), Node.js **≥ 24** и npm **≥ 10** (`frontend/package.json` / `.nvmrc`).
+**Требования для сборки:** Go **1.27.2+** (`go.mod`), Node.js **≥ 26** и npm **≥ 11** (`frontend/package.json` / `.nvmrc`).
 
 ### Шаг 1 — пакеты
 
@@ -172,10 +172,10 @@ apt update
 apt install -y curl git tar ca-certificates build-essential xz-utils
 ```
 
-### Шаг 2 — Go 1.27.1+
+### Шаг 2 — Go 1.27.2+
 
 ```bash
-GO_VER=1.27.1
+GO_VER=1.27.2
 curl -fL "https://go.dev/dl/go${GO_VER}.linux-amd64.tar.gz" -o /tmp/go.tgz
 rm -rf /usr/local/go
 tar -C /usr/local -xzf /tmp/go.tgz
@@ -184,12 +184,12 @@ export PATH=/usr/local/go/bin:$PATH
 go version
 ```
 
-### Шаг 3 — Node.js 24+
+### Шаг 3 — Node.js 26+
 
 Официальный бинарник (путь потом используется в `export PATH`):
 
 ```bash
-NODE_VER=24.20.0
+NODE_VER=26.12.0
 curl -fL "https://nodejs.org/dist/v${NODE_VER}/node-v${NODE_VER}-linux-x64.tar.xz" -o /tmp/node.tar.xz
 mkdir -p /usr/local/lib/nodejs
 tar -C /usr/local/lib/nodejs -xJf /tmp/node.tar.xz
@@ -213,7 +213,7 @@ bash <(curl -fL https://raw.githubusercontent.com/AlexeyLCP/lucx-ui/main/install
 ### Шаг 5 — клон форка с GitHub и сборка бинарника с фичами
 
 ```bash
-export PATH="/usr/local/go/bin:/usr/local/lib/nodejs/node-v24.20.0-linux-x64/bin:$PATH"
+export PATH="/usr/local/go/bin:/usr/local/lib/nodejs/node-v26.12.0-linux-x64/bin:$PATH"
 
 git clone -b feat/native-vk-hash-generator \
   https://github.com/samur005/lucx-ui-samur005.git \
@@ -269,7 +269,7 @@ ufw reload
 Пока PR #1 не влит:
 
 ```bash
-export PATH="/usr/local/go/bin:/usr/local/lib/nodejs/node-v24.20.0-linux-x64/bin:$PATH"
+export PATH="/usr/local/go/bin:/usr/local/lib/nodejs/node-v26.12.0-linux-x64/bin:$PATH"
 git clone -b feat/native-vk-hash-generator \
   https://github.com/samur005/lucx-ui-samur005.git \
   /usr/local/src/lucx-ui-samur005

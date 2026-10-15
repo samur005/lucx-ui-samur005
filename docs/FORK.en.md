@@ -32,7 +32,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/samur005/lucx-ui-samur005/fe
 
 1. installs packages (`curl git tar ca-certificates build-essential xz-utils iproute2`);
 2. clones the fork into `/usr/local/src/lucx-ui-samur005` (if it already exists: stashes local changes, then `git reset --hard origin/<branch>`);
-3. installs Go into `/usr/local/go` (skipped if Go ≥ the required version is already there; required = max of `GO_VER` and `go.mod`) and Node.js into `/usr/local/lib/nodejs` (skipped if Node ≥ 22.12 with npm is already available), adds `PATH` entries in `/etc/profile.d/go.sh` / `nodejs.sh` if no existing `/etc/profile.d` script already has them;
+3. installs Go into `/usr/local/go` (skipped if Go ≥ the required version is already there; required = max of `GO_VER` and `go.mod`) and Node.js into `/usr/local/lib/nodejs` (skipped if Node ≥ 26 with npm ≥ 11 is already available), adds `PATH` entries in `/etc/profile.d/go.sh` / `nodejs.sh` if no existing `/etc/profile.d` script already has them;
 4. **builds first** — frontend + Go binary into `/usr/local/src/lucx-ui-samur005/.install-fork/x-ui`; if the build fails it exits non-zero and **touches nothing** (service and current binary stay as they are);
 5. if no panel exists yet (`/usr/local/x-ui/x-ui` + `x-ui` unit), runs the stock AlexeyLCP `install.sh` (interactive: port/SSL questions, prints URL, username and password — **save them**); on an existing panel this step is skipped;
 6. stops `x-ui`, backs up `/usr/local/x-ui/x-ui.bak-<date>`, installs the fork binary, starts it and checks `systemctl is-active x-ui` (rolls back to the backup automatically if it does not come up);
@@ -50,7 +50,7 @@ Optional environment overrides, e.g. `LUCX_BRANCH=main bash <(curl -fsSL …)`:
 | `LUCX_BRANCH` | `feat/native-vk-hash-generator` | branch to build (`main` after PR #1 merges) |
 | `LUCX_SRC` | `/usr/local/src/lucx-ui-samur005` | source checkout directory |
 | `GO_VER` | `1.27.1` | minimum Go version (raised to `go.mod` if that is higher) |
-| `NODE_VER` | `24.20.0` | Node version to install when no suitable Node (≥ 22.12) exists |
+| `NODE_VER` | `26.12.0` | Node version to install when no suitable Node (≥ 26) exists |
 | `LUCX_SKIP_SERVICE` | `0` | `1` = build only (no stock install.sh, no systemd, no binary swap, no `/etc/profile.d` writes) |
 | `LUCX_UFW_OPEN` | `0` | `1` = if `ufw` is active, allow the public `x-ui`/xray ports |
 | `LUCX_ALLOW_REBOOT` | `0` | `1` = do not intercept the stock installer's reboot |
@@ -66,7 +66,7 @@ Upstream `install.sh` creates the service, DB and ports; the **fork binary** (vk
 
 Until [PR #1](https://github.com/samur005/lucx-ui-samur005/pull/1) merges, use branch `feat/native-vk-hash-generator`. After merge, use `main` in every command below.
 
-**Build requirements:** Go **1.27.1+** (`go.mod`), Node.js **≥ 24** and npm **≥ 10**.
+**Build requirements:** Go **1.27.2+** (`go.mod`), Node.js **≥ 26** and npm **≥ 11**.
 
 ### Step 1 — packages
 
@@ -75,10 +75,10 @@ apt update
 apt install -y curl git tar ca-certificates build-essential xz-utils
 ```
 
-### Step 2 — Go 1.27.1+
+### Step 2 — Go 1.27.2+
 
 ```bash
-GO_VER=1.27.1
+GO_VER=1.27.2
 curl -fL "https://go.dev/dl/go${GO_VER}.linux-amd64.tar.gz" -o /tmp/go.tgz
 rm -rf /usr/local/go
 tar -C /usr/local -xzf /tmp/go.tgz
@@ -87,10 +87,10 @@ export PATH=/usr/local/go/bin:$PATH
 go version
 ```
 
-### Step 3 — Node.js 24+
+### Step 3 — Node.js 26+
 
 ```bash
-NODE_VER=24.20.0
+NODE_VER=26.12.0
 curl -fL "https://nodejs.org/dist/v${NODE_VER}/node-v${NODE_VER}-linux-x64.tar.xz" -o /tmp/node.tar.xz
 mkdir -p /usr/local/lib/nodejs
 tar -C /usr/local/lib/nodejs -xJf /tmp/node.tar.xz
@@ -114,7 +114,7 @@ Common defaults are around **29830** (panel) and **2096** (subscription) — tru
 ### Step 5 — clone the fork and build the feature binary
 
 ```bash
-export PATH="/usr/local/go/bin:/usr/local/lib/nodejs/node-v24.20.0-linux-x64/bin:$PATH"
+export PATH="/usr/local/go/bin:/usr/local/lib/nodejs/node-v26.12.0-linux-x64/bin:$PATH"
 
 git clone -b feat/native-vk-hash-generator \
   https://github.com/samur005/lucx-ui-samur005.git \

@@ -28,12 +28,14 @@ LUCX_FORK_REPO="${LUCX_FORK_REPO:-https://github.com/samur005/lucx-ui-samur005.g
 LUCX_BRANCH="${LUCX_BRANCH:-feat/native-vk-hash-generator}"
 LUCX_SRC="${LUCX_SRC:-/usr/local/src/lucx-ui-samur005}"
 GO_VER="${GO_VER:-1.27.1}"
-NODE_VER="${NODE_VER:-24.20.0}"
+NODE_VER="${NODE_VER:-26.12.0}"
 LUCX_SKIP_SERVICE="${LUCX_SKIP_SERVICE:-0}"
 LUCX_UFW_OPEN="${LUCX_UFW_OPEN:-0}"
 LUCX_ALLOW_REBOOT="${LUCX_ALLOW_REBOOT:-0}"
 
-NODE_MIN="22.12.0"
+# frontend/package.json engines: node >=26, npm >=11 (since upstream lucx.29x);
+# npm 10 reads the msw override differently and npm ci rejects the lock file.
+NODE_MIN="26.0.0"
 XUI_DIR="/usr/local/x-ui"
 XUI_BIN="${XUI_DIR}/x-ui"
 NODE_BASE="/usr/local/lib/nodejs"
@@ -253,7 +255,7 @@ find_node() {
 }
 
 ensure_node() {
-    step "Node.js >= ${NODE_MIN} (frontend просит >= 24; 22.12+ работает с предупреждениями)"
+    step "Node.js >= ${NODE_MIN} (frontend требует node >= 26 и npm >= 11)"
     local found nv nd
     found=$(find_node)
     if [[ -n "$found" ]]; then
