@@ -127,28 +127,53 @@ func (s *InboundService) backfillClientStats(db *gorm.DB, inbounds []*model.Inbo
 // emailUsedByOtherInbounds reports whether email lives in any inbound other than
 // exceptInboundId. Inside a transaction pass tx: a pool query there starves the pool.
 func (s *InboundService) emailUsedByOtherInbounds(db *gorm.DB, email string, exceptInboundId int) (bool, error) {
-	if email == "" {
+	if strings.TrimSpace(email) == "" {
 		return false, nil
 	}
-	var count int64
-	err := db.Table("client_inbounds").
-		Joins("JOIN clients ON clients.id = client_inbounds.client_id").
-		Where("client_inbounds.inbound_id != ? AND LOWER(clients.email) = ?",
-			exceptInboundId, strings.ToLower(strings.TrimSpace(email))).
-		Count(&count).Error
+	shared, err := s.emailsUsedByOtherInbounds(db, []string{email}, exceptInboundId)
 	if err != nil {
 		return false, err
 	}
-	return count > 0, nil
+	return shared[strings.ToLower(strings.TrimSpace(email))], nil
 }
+
+// LUCX-HOOK: SQLite's LOWER() folds ASCII only, so LOWER(clients.email) IN
+// (Go-lowered emails) never matched a non-ASCII address such as "Рустам". The
+// email then looked unshared, its client_traffics row was dropped on a detach /
+// inbound sweep, and the next node snapshot re-seeded it with the node's stale
+// expiry and enable. emailCaseVariants adds the raw spellings (lower, as typed,
+// upper, title) that a plain IN can hit, and the result is folded in Go.
+func emailCaseVariants(emails []string) []string {
+	out := make([]string, 0, len(emails)*4)
+	seen := make(map[string]struct{}, len(emails)*4)
+	for _, e := range emails {
+		e = strings.TrimSpace(e)
+		if e == "" {
+			continue
+		}
+		for _, v := range append(caseVariants(e), caseVariants(strings.ToLower(e))...) {
+			if _, ok := seen[v]; ok {
+				continue
+			}
+			seen[v] = struct{}{}
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// END LUCX-HOOK
 
 func (s *InboundService) emailsUsedByOtherInbounds(db *gorm.DB, emails []string, exceptInboundId int) (map[string]bool, error) {
 	shared := make(map[string]bool, len(emails))
 	want := make(map[string]struct{}, len(emails))
+	raw := make(map[string][]string, len(emails))
 	for _, e := range emails {
-		e = strings.ToLower(strings.TrimSpace(e))
-		if e != "" {
-			want[e] = struct{}{}
+		t := strings.TrimSpace(e)
+		l := strings.ToLower(t)
+		if l != "" {
+			want[l] = struct{}{}
+			raw[l] = append(raw[l], t)
 		}
 	}
 	if len(want) == 0 {
@@ -158,18 +183,29 @@ func (s *InboundService) emailsUsedByOtherInbounds(db *gorm.DB, emails []string,
 	for e := range want {
 		lowered = append(lowered, e)
 	}
-	for _, batch := range chunkStrings(lowered, sqlInChunk) {
+	// Each email expands to up to 8 bound spellings; 100 keeps a batch under
+	// sqliteMaxVars.
+	for _, batch := range chunkStrings(lowered, 100) {
+		var spellings []string
+		for _, l := range batch {
+			spellings = append(spellings, raw[l]...)
+		}
+		variants := emailCaseVariants(spellings)
 		var rows []struct{ Email string }
 		err := db.Table("client_inbounds").
 			Joins("JOIN clients ON clients.id = client_inbounds.client_id").
-			Select("DISTINCT LOWER(clients.email) AS email").
-			Where("client_inbounds.inbound_id != ? AND LOWER(clients.email) IN ?", exceptInboundId, batch).
+			Select("DISTINCT clients.email AS email").
+			Where("client_inbounds.inbound_id != ? AND (LOWER(clients.email) IN ? OR clients.email IN ?)",
+				exceptInboundId, batch, variants).
 			Scan(&rows).Error
 		if err != nil {
 			return nil, err
 		}
 		for _, r := range rows {
-			shared[r.Email] = true
+			l := strings.ToLower(strings.TrimSpace(r.Email))
+			if _, ok := want[l]; ok {
+				shared[l] = true
+			}
 		}
 	}
 	return shared, nil

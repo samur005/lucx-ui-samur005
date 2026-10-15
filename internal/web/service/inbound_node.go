@@ -261,6 +261,33 @@ func (s *InboundService) mergeNodeClientTraffic(tx *gorm.DB, cs xray.ClientTraff
 	).Error
 }
 
+// LUCX-HOOK: seedNodeTrafficRowFromRecord overlays the master client record's
+// lifecycle onto a client_traffics row about to be created from a node
+// snapshot. Same rules as the merge: master absolute expiry wins (the node may
+// only activate a delayed start), and a node disable latches only when the node
+// judged the client on the master's own limits.
+func seedNodeTrafficRowFromRecord(tx *gorm.DB, row *xray.ClientTraffic, cs xray.ClientTraffic, now int64) error {
+	var recs []model.ClientRecord
+	if err := tx.Model(&model.ClientRecord{}).Where("email = ?", cs.Email).Limit(1).Find(&recs).Error; err != nil {
+		return err
+	}
+	if len(recs) == 0 {
+		return nil
+	}
+	rec := recs[0]
+	row.ExpiryTime = mergeActivationExpiry(rec.ExpiryTime, cs.ExpiryTime)
+	row.Total = rec.TotalGB
+	row.Reset, row.ResetDay, row.ResetWeekday, row.ResetMax = rec.Reset, rec.ResetDay, rec.ResetWeekday, rec.ResetMax
+	master := &xray.ClientTraffic{Enable: rec.Enable, ExpiryTime: row.ExpiryTime, Total: rec.TotalGB}
+	row.Enable = rec.Enable
+	if rec.Enable && !cs.Enable && !nodeDisableIsStale(master, cs, now, 0, 0) {
+		row.Enable = false
+	}
+	return nil
+}
+
+// END LUCX-HOOK
+
 // mergeActivationExpiry: master absolute wins; node may only activate when
 // master is unset/duration. Node auto-renew goes through nodeClientRenewed.
 func mergeActivationExpiry(existing, node int64) int64 {
@@ -1120,6 +1147,13 @@ func (s *InboundService) setRemoteTrafficLocked(nodeID int, snap *runtime.Traffi
 					Down:         seedDown,
 					LastOnline:   cs.LastOnline,
 				}
+				// LUCX-HOOK: a lost row (e.g. dropped by a detach) is re-seeded here
+				// from the node's copy, which for a share-only inbound still holds the
+				// pre-edit expiry/enable. The master client record owns the lifecycle.
+				if err := seedNodeTrafficRowFromRecord(tx, row, cs, now); err != nil {
+					return false, err
+				}
+				// END LUCX-HOOK
 				if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "email"}}, DoNothing: true}).
 					Create(row).Error; err != nil {
 					return false, err
