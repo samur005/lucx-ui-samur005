@@ -71,7 +71,10 @@ func (s *ClientService) delInboundClients(inboundSvc *InboundService, inboundId 
 	}
 
 	// LUCX-HOOK: share-only sidecars keep clients in client_inbounds, not settings.
-	if shareOnlySidecar(oldInbound.Protocol) {
+	// LUCX-FORK: node-hosted ones fall through to the sidecarOnly path below,
+	// which also pushes the delete to the node (the node's own panel keeps the
+	// client otherwise and the next snapshot brings it back).
+	if shareOnlySidecar(oldInbound.Protocol) && oldInbound.NodeID == nil {
 		emails := make([]string, 0, len(recs))
 		for _, rec := range recs {
 			emails = append(emails, rec.Email)
@@ -154,6 +157,9 @@ func (s *ClientService) delInboundClients(inboundSvc *InboundService, inboundId 
 		}
 		oldInbound.Settings = string(newSettings)
 	}
+	// What the node push delivers: captured before commitInboundClientSettings
+	// may rebase oldInbound.Settings onto a concurrent traffic-tick write.
+	pushedSettings := oldInbound.Settings
 
 	var sharedSet map[string]bool
 	if !keepTraffic {
@@ -279,7 +285,7 @@ func (s *ClientService) delInboundClients(inboundSvc *InboundService, inboundId 
 		}
 	}
 	if nodePush && !nodePushFailed {
-		advancePushedInbound(nodeRt, prevSettings, string(newSettings), oldInbound)
+		advancePushedInbound(nodeRt, prevSettings, pushedSettings, oldInbound)
 	}
 
 	return needRestart, nil
@@ -1192,7 +1198,9 @@ func (s *ClientService) DelInboundClientByEmail(inboundSvc *InboundService, inbo
 	}
 
 	// LUCX-HOOK: share-only sidecars keep clients in client_inbounds, not settings.
-	if shareOnlySidecar(oldInbound.Protocol) {
+	// LUCX-FORK: node-hosted ones take the sidecarLinked path below, which
+	// pushes the delete/detach to the node and marks it dirty.
+	if shareOnlySidecar(oldInbound.Protocol) && oldInbound.NodeID == nil {
 		return false, s.detachShareOnlyClient(inboundSvc, inboundId, []string{email}, keepTraffic)
 	}
 	// END LUCX-HOOK
@@ -1238,8 +1246,8 @@ func (s *ClientService) DelInboundClientByEmail(inboundSvc *InboundService, inbo
 	}
 
 	prevSettings := oldInbound.Settings
+	db := database.GetDB()
 	if !sidecarLinked {
-		db := database.GetDB()
 		newClients = compactOrphans(db, newClients)
 		if newClients == nil {
 			newClients = []any{}
@@ -1251,6 +1259,9 @@ func (s *ClientService) DelInboundClientByEmail(inboundSvc *InboundService, inbo
 		}
 		oldInbound.Settings = string(newSettings)
 	}
+	// What the node push delivers: captured before commitInboundClientSettings
+	// may rebase oldInbound.Settings onto a concurrent traffic-tick write.
+	pushedSettings := oldInbound.Settings
 	// END LUCX-HOOK
 
 	emailShared, err := inboundSvc.emailUsedByOtherInbounds(db, email, inboundId)
@@ -1365,7 +1376,7 @@ func (s *ClientService) DelInboundClientByEmail(inboundSvc *InboundService, inbo
 				if err1 != nil {
 					logger.Warning("Error in deleting client on", rt.Name(), ":", err1)
 				} else {
-					advancePushedInbound(rt, prevSettings, string(newSettings), oldInbound)
+					advancePushedInbound(rt, prevSettings, pushedSettings, oldInbound)
 				}
 			}
 		}
