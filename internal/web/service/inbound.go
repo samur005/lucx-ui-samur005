@@ -20,7 +20,6 @@ import (
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
-	"github.com/mhsanaei/3x-ui/v3/internal/mtproto"
 	"github.com/mhsanaei/3x-ui/v3/internal/tuic"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/common"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/maskcompat"
@@ -1239,8 +1238,16 @@ func (s *InboundService) normalizeMtprotoXrayPort(inbound *model.Inbound, oldSet
 	if port <= 0 {
 		port = settingsRouteXrayPort(parsed)
 	}
+	// LUCX-HOOK: exclude bridge ports other sidecars already hold. A freshly
+	// freed ephemeral port is often handed out again, and two hidden socks
+	// bridges on one bind refuse the whole Xray config ("both bind
+	// 127.0.0.1:<port>"); the stored port loses to a live collision.
+	taken := s.takenXrayEgressPorts(inbound.Id)
+	if portTaken(taken, port) {
+		port = 0
+	}
 	if port <= 0 {
-		allocated, err := mtproto.FreeLocalPort()
+		allocated, err := allocateXrayEgressPort(taken)
 		if err != nil {
 			return common.NewError("mtproto: could not allocate an Xray egress port:", err)
 		}
@@ -2046,6 +2053,9 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 	oldProtocol := oldInbound.Protocol
 	oldRoutedMtproto := mtprotoRoutesThroughXray(oldInbound)
 	oldRoutedLucx := lucxRoutesThroughXray(oldInbound)
+	// LUCX-HOOK: kernel peer changes do not alter the transparent Xray bridge.
+	kernelPeerOnly := false
+	// END LUCX-HOOK
 	if err := s.normalizeMtprotoXrayPort(inbound, oldInbound.Settings); err != nil {
 		return inbound, false, err
 	}
@@ -2206,6 +2216,9 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 		}
 		oldInbound.Tag = resolvedTag
 		inbound.Tag = oldInbound.Tag
+		// LUCX-HOOK: compare against the running bridge after auto-tag resolution.
+		kernelPeerOnly = isKernelWireguardInbound(&running) && isKernelWireguardInbound(oldInbound) && !kernelWireguardBridgeChanged(&running, oldInbound)
+		// END LUCX-HOOK
 
 		if oldInbound.NodeID == nil {
 			rt, push, _, perr := s.nodePushPlan(oldInbound)
@@ -2214,7 +2227,7 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 			}
 			if !push {
 				needRestart = true
-			} else if servedOutsideXray(oldProtocol) || servedOutsideXray(oldInbound.Protocol) || lucxRuntimeSidecar(oldProtocol) || lucxRuntimeSidecar(oldInbound.Protocol) {
+			} else if servedOutsideXray(oldProtocol) || servedOutsideXray(oldInbound.Protocol) || lucxRuntimeSidecar(oldProtocol) || lucxRuntimeSidecar(oldInbound.Protocol) || isKernelWireguardInbound(&running) || isKernelWireguardInbound(oldInbound) {
 				oldSnapshot := *oldInbound
 				oldSnapshot.Tag = tag
 				oldSnapshot.Protocol = oldProtocol
@@ -2228,7 +2241,7 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 						pushable = false
 					}
 				}
-				newProtocolIsSidecar := servedOutsideXray(oldInbound.Protocol) || lucxRuntimeSidecar(oldInbound.Protocol)
+				newProtocolIsSidecar := servedOutsideXray(oldInbound.Protocol) || lucxRuntimeSidecar(oldInbound.Protocol) || isKernelWireguardInbound(oldInbound)
 				if pushable {
 					postCommitApply = func() {
 						if err2 := rt.UpdateInbound(context.Background(), &oldSnapshot, payload); err2 == nil {
@@ -2302,9 +2315,11 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 		// (Re)generate the Xray config whenever routing was or is now enabled, so
 		// the egress SOCKS bridge is added, moved, or dropped to match the new
 		// settings.
-		if mtprotoRoutesThroughXray(inbound) || lucxRoutesThroughXray(inbound) || oldRoutedMtproto || oldRoutedLucx {
+		// LUCX-HOOK: exclude opt-in kernel WG edits that leave the bridge intact.
+		if mtprotoRoutesThroughXray(inbound) || oldRoutedMtproto || (!kernelPeerOnly && (lucxRoutesThroughXray(inbound) || oldRoutedLucx)) {
 			needRestart = true
 		}
+		// END LUCX-HOOK
 		return nil
 	})
 	if txErr != nil {

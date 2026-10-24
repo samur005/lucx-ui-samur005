@@ -16,6 +16,7 @@ import (
 	"github.com/mhsanaei/3x-ui/v3/internal/config"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
+	kernelwg "github.com/mhsanaei/3x-ui/v3/internal/lucx/wireguard" // LUCX-HOOK: kernel WireGuard
 	"github.com/mhsanaei/3x-ui/v3/internal/tuic"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/json_util"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/maskcompat"
@@ -23,8 +24,10 @@ import (
 
 	// LUCX-HOOK: AWG — restore policy routing synchronously after Xray restarts.
 	"github.com/mhsanaei/3x-ui/v3/internal/awg"
-	// NaiveProxy tunnel SOCKS egress (injectTunnelEgress).
+	// NaiveProxy tunnel SOCKS egress (injectTunnelEgress) + geodata sanitize.
+	"github.com/mhsanaei/3x-ui/v3/internal/lucx"
 	"github.com/mhsanaei/3x-ui/v3/internal/lucx/tunnel"
+
 	// END LUCX-HOOK
 
 	"go.uber.org/atomic"
@@ -186,6 +189,10 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 	xrayConfig.API = ensureAPIServices(xrayConfig.API)
 	xrayConfig.Policy = ensureStatsPolicy(xrayConfig.Policy)
 	xrayConfig.RouterConfig = stripDisabledRules(xrayConfig.RouterConfig)
+	// LUCX-HOOK: the core exits when a geodata asset file is missing on disk; a
+	// stock entry whose fetch failed must not take the whole core down.
+	xrayConfig.Geodata = lucx.SanitizeGeodataAssets(xrayConfig.Geodata, config.GetBinFolderPath())
+	// END LUCX-HOOK
 	// A pasted or restored template can carry pre-#6258 XHTTP keys, a pre-26.10.10 xdns mask or a
 	// pre-26.9.9 quicParams.udpHop, which the core ignores, or a udphop not last, which it cannot dial.
 	xrayConfig.OutboundConfigs = healOutboundStreams(xrayConfig.OutboundConfigs,
@@ -216,7 +223,7 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 			continue
 		}
 		// LUCX-HOOK: sidecars are not Xray protocols (AWG, tunnels, cover, gateway).
-		if lucxRuntimeSidecar(inbound.Protocol) {
+		if lucxRuntimeSidecar(inbound.Protocol) || kernelwg.IsKernel(inbound) {
 			continue
 		}
 		// END LUCX-HOOK
@@ -450,6 +457,14 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 	}
 	// END LUCX-HOOK
 
+	// LUCX-HOOK: standard Linux kernel WireGuard uses a transparent bridge.
+	for _, inbound := range inbounds {
+		if !inbound.Enable || inbound.NodeID != nil || !kernelwg.IsKernel(inbound) {
+			continue
+		}
+		injectKernelWireguardSafely(xrayConfig, inbound)
+	}
+	// END LUCX-HOOK
 	// Route opted-in local mtproto inbounds through the core's router. Each one
 	// gets a loopback SOCKS bridge — tagged with the inbound's own tag so it is
 	// matchable in routing rules — that its mtg sidecar dials Telegram through.
@@ -889,7 +904,10 @@ func injectTproxyEgress(cfg *xray.Config, inbound *model.Inbound) {
 // loopback SOCKS bridge tagged with the inbound's own tag (tproxy pattern).
 // anytls-go has no SOCKS dialer, so the sidecar's own outbound TCP is redirected
 // by uid (lucx-mtproxy, same engine user) into the hidden Xray inbound below;
-// the bridge listen itself is the tproxy uid REDIRECT listener on 23990.
+// the bridge listen itself is the tproxy uid REDIRECT listener on 23990, which
+// dials the hidden inbound WITHOUT credentials (lucx.303: auth=true here made
+// the socks reject the bridge's noauth handshake and the tunnel died with an
+// SSL error on every routed dial).
 func injectAnytlsEgress(cfg *xray.Config, inbound *model.Inbound) {
 	var parsed struct {
 		RouteThroughXray bool   `json:"routeThroughXray"`
@@ -902,7 +920,7 @@ func injectAnytlsEgress(cfg *xray.Config, inbound *model.Inbound) {
 	if !parsed.RouteThroughXray || parsed.RouteXrayPort <= 0 || inbound.Tag == "" {
 		return
 	}
-	injectSocksEgress(cfg, inbound.Tag, parsed.RouteXrayPort, parsed.OutboundTag, "anytls egress", true)
+	injectSocksEgress(cfg, inbound.Tag, parsed.RouteXrayPort, parsed.OutboundTag, "anytls egress", false)
 }
 
 func injectTunnelEgress(cfg *xray.Config, naive tunnel.NaiveConfig) {
@@ -916,6 +934,15 @@ func injectSocksEgress(cfg *xray.Config, tag string, port int, outboundTag, logP
 	for i := range cfg.InboundConfigs {
 		if cfg.InboundConfigs[i].Tag == tag {
 			logger.Warning(logPrefix, ": inbound tag [", tag, "] already present in generated config, skipping bridge")
+			return
+		}
+		// The bind-collision guard keeps Xray up when two routed sidecars
+		// still hold the same egress port (stale rows before a re-save):
+		// two hidden socks inbounds on one bind = "config refused" and the
+		// whole Xray down. The surviving one is whoever rendered first —
+		// inbounds render in id order, so the lower-id sidecar wins.
+		if cfg.InboundConfigs[i].Protocol == "socks" && cfg.InboundConfigs[i].Port == port {
+			logger.Warning(logPrefix, ": hidden socks bind 127.0.0.1:", port, " is already taken, skipping bridge for [", tag, "] — re-save the inbound to re-allocate its egress port")
 			return
 		}
 	}

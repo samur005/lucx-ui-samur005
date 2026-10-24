@@ -33,7 +33,7 @@ if [ -z "$MTG_MULTI_VER" ]; then
 fi
 mkdir -p build/bin
 cd build/bin
-curl -sfLRO "https://github.com/XTLS/Xray-core/releases/download/v26.10.10/Xray-linux-${ARCH}.zip"
+curl -sfLRO "https://github.com/XTLS/Xray-core/releases/download/v26.10.21/Xray-linux-${ARCH}.zip"
 unzip "Xray-linux-${ARCH}.zip"
 rm -f "Xray-linux-${ARCH}.zip" geoip.dat geosite.dat
 mv xray "xray-linux-${FNAME}"
@@ -59,6 +59,10 @@ curl -sfLRo geosite_RU.dat https://github.com/runetfreedom/russia-v2ray-rules-da
 # LUCX-HOOK: RoscomVPN custom geo (RKN geoblock lists)
 curl -sfLRo geoip_ROSCOM.dat https://github.com/hydraponique/roscomvpn-geoip/releases/latest/download/geoip.dat
 curl -sfLRo geosite_ROSCOM.dat https://github.com/hydraponique/roscomvpn-geosite/releases/latest/download/geosite.dat
+# END LUCX-HOOK
+# LUCX-HOOK: Geo-Aggregator custom geo (RU blocklist aggregate, on main)
+curl -sfLRo geoip_GA.dat https://raw.githubusercontent.com/Ground-Zerro/Geo-Aggregator/main/geodat/geoip_GA.dat
+curl -sfLRo geosite_GA.dat https://raw.githubusercontent.com/Ground-Zerro/Geo-Aggregator/main/geodat/geosite_GA.dat
 # END LUCX-HOOK
 cd ../../
 # LUCX-HOOK: bin/lucx-acme.sh (ACME on loopback, :80 forwarded)

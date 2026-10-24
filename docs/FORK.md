@@ -146,7 +146,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/samur005/lucx-ui-samur005/fe
 | `LUCX_FORK_REPO` | `https://github.com/samur005/lucx-ui-samur005.git` | git-URL форка |
 | `LUCX_BRANCH` | `feat/native-vk-hash-generator` | ветка для сборки (после merge PR #1 — `main`) |
 | `LUCX_SRC` | `/usr/local/src/lucx-ui-samur005` | каталог с исходниками |
-| `GO_VER` | `1.27.1` | минимальная версия Go (если `go.mod` требует больше — ставится версия из `go.mod`) |
+| `GO_VER` | `1.27.3` | минимальная версия Go (если `go.mod` требует больше — ставится версия из `go.mod`) |
 | `NODE_VER` | `26.12.0` | какую версию Node ставить, если подходящей (≥ 26) нет |
 | `LUCX_SKIP_SERVICE` | `0` | `1` — только сборка (без стокового install.sh, systemd, замены бинарника и записи в `/etc/profile.d`) |
 | `LUCX_UFW_OPEN` | `0` | `1` — при активном `ufw` открыть публичные порты `x-ui`/xray |
@@ -163,7 +163,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/samur005/lucx-ui-samur005/fe
 
 Пока открыт [PR #1](https://github.com/samur005/lucx-ui-samur005/pull/1) — ветка `feat/native-vk-hash-generator`. После merge в `main` замените имя ветки на `main` во всех командах ниже.
 
-**Требования для сборки:** Go **1.27.2+** (`go.mod`), Node.js **≥ 26** и npm **≥ 11** (`frontend/package.json` / `.nvmrc`).
+**Требования для сборки:** Go **1.27.3+** (`go.mod`), Node.js **≥ 26** и npm **≥ 11** (`frontend/package.json` / `.nvmrc`).
+
+**Синхронизация с upstream:** оверлей следует версии официального [AlexeyLCP/lucx-ui](https://github.com/AlexeyLCP/lucx-ui) `main` — строка версии берётся из `internal/config` (`lucxVersion`), собственного суффикса форк не вводит. Последний merge: upstream `08c46308` (v3.10.2, lucx.309/310, Go 1.27.3). Модуль ядра WireGuard из upstream опционален (включается флагом `kernel` в настройках конкретного inbound, по умолчанию выключен).
 
 ### Шаг 1 — пакеты
 
@@ -172,10 +174,10 @@ apt update
 apt install -y curl git tar ca-certificates build-essential xz-utils
 ```
 
-### Шаг 2 — Go 1.27.2+
+### Шаг 2 — Go 1.27.3+
 
 ```bash
-GO_VER=1.27.2
+GO_VER=1.27.3
 curl -fL "https://go.dev/dl/go${GO_VER}.linux-amd64.tar.gz" -o /tmp/go.tgz
 rm -rf /usr/local/go
 tar -C /usr/local -xzf /tmp/go.tgz

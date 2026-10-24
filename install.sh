@@ -167,7 +167,7 @@ lucx_fetch_geofiles() {
             echo -e "${green}Downloading geodata...${plain}"
         fi
         fetched=1
-        if ! curl -fLRo "${dest}/${name}" --retry 5 --retry-delay 3 --connect-timeout 15 --max-time 180 "$url"; then
+        if ! curl -fLRo "${dest}/${name}" --retry 5 --retry-delay 3 --connect-timeout 15 --max-time 600 "$url"; then
             echo -e "${yellow}${name}: download failed${plain}"
             rm -f "${dest}/${name}"
             case "$name" in
@@ -183,6 +183,8 @@ geoip_RU.dat|https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/lat
 geosite_RU.dat|https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
 geoip_ROSCOM.dat|https://github.com/hydraponique/roscomvpn-geoip/releases/latest/download/geoip.dat
 geosite_ROSCOM.dat|https://github.com/hydraponique/roscomvpn-geosite/releases/latest/download/geosite.dat
+geoip_GA.dat|https://raw.githubusercontent.com/Ground-Zerro/Geo-Aggregator/main/geodat/geoip_GA.dat
+geosite_GA.dat|https://raw.githubusercontent.com/Ground-Zerro/Geo-Aggregator/main/geodat/geosite_GA.dat
 GEO
     if [[ "$fetched" -eq 0 ]]; then
         echo -e "${green}geodata already present — skip${plain}"
@@ -1909,7 +1911,10 @@ ReadWritePaths=${line}
 ReadWriteDirectories=${line}
 # Repeat the full set: a drop-in CapabilityBoundingSet replaces the unit list.
 # CAP_SETUID/CAP_SETGID: mtproxy setgroups()+setuid() to lucx-mtproxy.
-CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_SETUID CAP_SETGID
+# CAP_CHOWN: the routed anytls child runs under that uid and reads its
+# cert/key copies and data dir, so the panel chowns them.
+# CAP_KILL: the panel stops/signals sidecars that run under that uid.
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_SETUID CAP_SETGID CAP_CHOWN CAP_KILL
 EOF
     if [[ "$(_xui_systemd_major_version)" -ge 239 ]]; then
         cat >> "$temp_file" << 'EOF'
@@ -2228,6 +2233,14 @@ install_x-ui() {
         fi
     fi
     trap - EXIT INT TERM
+
+    # LUCX-HOOK: normalize ownership of the fresh tree. The release tarball
+    # stores the CI runner's uid (GitHub packs it as user "runner", and tar
+    # extraction as root keeps --same-owner), while the sandboxed panel has no
+    # CAP_FOWNER and cannot chmod a foreign-owned sidecar binary -- every
+    # reconcile then fails with "chmod ... operation not permitted". Runs
+    # after the cp -a restore above, which also preserves ownership.
+    chown -R root:root . 2> /dev/null
 
     rm -f bin/tuic-server bin/tuic-server-* > /dev/null 2>&1 || true
     rm -rf bin/tuic > /dev/null 2>&1 || true

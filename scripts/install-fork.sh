@@ -27,7 +27,7 @@ set -euo pipefail
 LUCX_FORK_REPO="${LUCX_FORK_REPO:-https://github.com/samur005/lucx-ui-samur005.git}"
 LUCX_BRANCH="${LUCX_BRANCH:-feat/native-vk-hash-generator}"
 LUCX_SRC="${LUCX_SRC:-/usr/local/src/lucx-ui-samur005}"
-GO_VER="${GO_VER:-1.27.1}"
+GO_VER="${GO_VER:-1.27.3}"
 NODE_VER="${NODE_VER:-26.12.0}"
 LUCX_SKIP_SERVICE="${LUCX_SKIP_SERVICE:-0}"
 LUCX_UFW_OPEN="${LUCX_UFW_OPEN:-0}"

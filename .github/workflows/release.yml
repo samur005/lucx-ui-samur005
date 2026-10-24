@@ -127,7 +127,7 @@ jobs:
           cd x-ui/bin
 
           # Download dependencies
-          Xray_URL="https://github.com/XTLS/Xray-core/releases/download/v26.10.10/"
+          Xray_URL="https://github.com/XTLS/Xray-core/releases/download/v26.10.21/"
           if [ "${{ matrix.platform }}" == "amd64" ]; then
             fetch ${Xray_URL}Xray-linux-64.zip
             unzip Xray-linux-64.zip
@@ -219,7 +219,7 @@ jobs:
           DEST="$PWD/x-ui/bin"
           mkdir -p "$DEST"
           P="${{ matrix.platform }}"
-          TPROXY_SHA=acc252ece3a25c29e9b83f608499a5567a33ab2a
+          TPROXY_SHA=c8adb8b7c6b7fc46c12ae3acb68be9070c26a8e8
           rm -rf /tmp/tproxy-src
           mkdir /tmp/tproxy-src
           git -C /tmp/tproxy-src init
@@ -394,7 +394,7 @@ jobs:
           cd x-ui\bin
 
           # Download Xray for Windows
-          $Xray_URL = "https://github.com/XTLS/Xray-core/releases/download/v26.10.10/"
+          $Xray_URL = "https://github.com/XTLS/Xray-core/releases/download/v26.10.21/"
           Invoke-WebRequest @retry -Uri "${Xray_URL}Xray-windows-64.zip" -OutFile "Xray-windows-64.zip"
           Expand-Archive -Path "Xray-windows-64.zip" -DestinationPath .
           Remove-Item "Xray-windows-64.zip"

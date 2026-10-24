@@ -9,6 +9,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -20,6 +21,7 @@ import (
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
 	"github.com/mhsanaei/3x-ui/v3/internal/lucx/nodetype"
 	"github.com/mhsanaei/3x-ui/v3/internal/lucx/tunnel"
+	kernelwg "github.com/mhsanaei/3x-ui/v3/internal/lucx/wireguard"
 	"github.com/mhsanaei/3x-ui/v3/internal/mtproto"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/common"
 )
@@ -536,7 +538,7 @@ func lucxRuntimeSidecar(p model.Protocol) bool {
 
 // LUCX-HOOK: any LucX sidecar whose egress bridge lives only in generated Xray JSON.
 func lucxRoutesThroughXray(inbound *model.Inbound) bool {
-	return awgRoutesThroughXray(inbound) ||
+	return kernelwg.IsKernel(inbound) || awgRoutesThroughXray(inbound) ||
 		naiveRoutesThroughXray(inbound) ||
 		qwdttRoutesThroughXray(inbound) ||
 		csqttRoutesThroughXray(inbound) ||
@@ -1066,6 +1068,49 @@ func (s *InboundService) checkTrustTunnelPortConflict(inbound *model.Inbound, ig
 	return nil
 }
 
+// takenXrayEgressPorts lists the loopback bridge ports OTHER routed sidecar
+// inbounds already hold. mtproto.FreeLocalPort hands back freshly freed
+// ephemeral ports, so two sidecars saved back to back can receive the same
+// one — the generated Xray config then refuses the whole start ("both bind
+// 127.0.0.1:<port>") and every protocol goes down with it.
+func (s *InboundService) takenXrayEgressPorts(excludeId int) map[int]struct{} {
+	taken := map[int]struct{}{}
+	inbounds, err := s.GetAllInbounds()
+	if err != nil {
+		logger.Warning("tunnel: egress-port collision check failed:", err)
+		return taken
+	}
+	for _, ib := range inbounds {
+		if ib == nil || ib.Id == excludeId {
+			continue
+		}
+		if p := parseRouteXrayPort(ib.Settings); p > 0 {
+			taken[p] = struct{}{}
+		}
+	}
+	return taken
+}
+
+func portTaken(taken map[int]struct{}, port int) bool {
+	_, busy := taken[port]
+	return busy && port > 0
+}
+
+// allocateXrayEgressPort retries FreeLocalPort until the port lands outside
+// the taken set (16 tries is far beyond any real panel's sidecar count).
+func allocateXrayEgressPort(taken map[int]struct{}) (int, error) {
+	for i := 0; i < 16; i++ {
+		allocated, err := mtproto.FreeLocalPort()
+		if err != nil {
+			return 0, err
+		}
+		if !portTaken(taken, allocated) {
+			return allocated, nil
+		}
+	}
+	return 0, errors.New("egress port allocation collided 16 times")
+}
+
 func (s *InboundService) normalizeSidecarXrayPort(inbound *model.Inbound, oldSettings string, proto model.Protocol, label string) error {
 	if inbound.Protocol != proto {
 		return nil
@@ -1091,12 +1136,19 @@ func (s *InboundService) normalizeSidecarXrayPort(inbound *model.Inbound, oldSet
 		return nil
 	}
 
+	taken := s.takenXrayEgressPorts(inbound.Id)
 	port := parseSettingsIntKey(oldSettings, "routeXrayPort")
 	if port <= 0 && proto != model.Naive {
 		port = settingsIntKey(parsed, "routeXrayPort")
 	}
+	// A stored port another sidecar already took is re-allocated: the port is
+	// backend plumbing, not client data (Rule 0 is about client-visible
+	// values), and keeping it means Xray refuses the whole config.
+	if portTaken(taken, port) {
+		port = 0
+	}
 	if port <= 0 {
-		allocated, err := mtproto.FreeLocalPort()
+		allocated, err := allocateXrayEgressPort(taken)
 		if err != nil {
 			return common.NewError(label+": could not allocate an Xray egress port:", err)
 		}
@@ -1314,6 +1366,9 @@ func (s *InboundService) checkAwgTproxyPort(inbound *model.Inbound) error {
 }
 
 func (s *InboundService) normalizeLucxSidecarsOnCreate(inbound *model.Inbound) error {
+	if err := s.validateKernelWireguard(inbound); err != nil {
+		return err
+	}
 	if err := s.checkAwgTproxyPort(inbound); err != nil {
 		return err
 	}
@@ -1412,6 +1467,9 @@ func (s *InboundService) normalizeLucxSidecarsOnCreate(inbound *model.Inbound) e
 }
 
 func (s *InboundService) normalizeLucxSidecarsOnUpdate(inbound, oldInbound *model.Inbound) error {
+	if err := s.validateKernelWireguard(inbound); err != nil {
+		return err
+	}
 	if err := s.checkAwgTproxyPort(inbound); err != nil {
 		return err
 	}

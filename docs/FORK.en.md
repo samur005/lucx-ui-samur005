@@ -49,7 +49,7 @@ Optional environment overrides, e.g. `LUCX_BRANCH=main bash <(curl -fsSL …)`:
 | `LUCX_FORK_REPO` | `https://github.com/samur005/lucx-ui-samur005.git` | fork git URL |
 | `LUCX_BRANCH` | `feat/native-vk-hash-generator` | branch to build (`main` after PR #1 merges) |
 | `LUCX_SRC` | `/usr/local/src/lucx-ui-samur005` | source checkout directory |
-| `GO_VER` | `1.27.1` | minimum Go version (raised to `go.mod` if that is higher) |
+| `GO_VER` | `1.27.3` | minimum Go version (raised to `go.mod` if that is higher) |
 | `NODE_VER` | `26.12.0` | Node version to install when no suitable Node (≥ 26) exists |
 | `LUCX_SKIP_SERVICE` | `0` | `1` = build only (no stock install.sh, no systemd, no binary swap, no `/etc/profile.d` writes) |
 | `LUCX_UFW_OPEN` | `0` | `1` = if `ufw` is active, allow the public `x-ui`/xray ports |
@@ -66,7 +66,9 @@ Upstream `install.sh` creates the service, DB and ports; the **fork binary** (vk
 
 Until [PR #1](https://github.com/samur005/lucx-ui-samur005/pull/1) merges, use branch `feat/native-vk-hash-generator`. After merge, use `main` in every command below.
 
-**Build requirements:** Go **1.27.2+** (`go.mod`), Node.js **≥ 26** and npm **≥ 11**.
+**Build requirements:** Go **1.27.3+** (`go.mod`), Node.js **≥ 26** and npm **≥ 11**.
+
+**Upstream sync:** the overlay tracks the official [AlexeyLCP/lucx-ui](https://github.com/AlexeyLCP/lucx-ui) `main` — the version string comes from `internal/config` (`lucxVersion`); the fork adds no suffix of its own. Last merge: upstream `08c46308` (v3.10.2, lucx.309/310, Go 1.27.3). Upstream's kernel WireGuard backend is optional (per-inbound `kernel` flag in settings, off by default).
 
 ### Step 1 — packages
 
@@ -75,10 +77,10 @@ apt update
 apt install -y curl git tar ca-certificates build-essential xz-utils
 ```
 
-### Step 2 — Go 1.27.2+
+### Step 2 — Go 1.27.3+
 
 ```bash
-GO_VER=1.27.2
+GO_VER=1.27.3
 curl -fL "https://go.dev/dl/go${GO_VER}.linux-amd64.tar.gz" -o /tmp/go.tgz
 rm -rf /usr/local/go
 tar -C /usr/local -xzf /tmp/go.tgz

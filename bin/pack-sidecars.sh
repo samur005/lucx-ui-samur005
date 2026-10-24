@@ -24,26 +24,34 @@ mkdir -p "$DEST"
 
 if ! have "caddy-naive-linux-${ARCH}"; then
     if [[ "$ARCH" == amd64 ]]; then
-        fetch -O /tmp/caddy-naive.tar.xz "https://github.com/klzgrad/forwardproxy/releases/download/v2.11.2-naive/caddy-forwardproxy-naive.tar.xz"
+        fetch -O /tmp/caddy-naive.tar.xz "https://github.com/klzgrad/forwardproxy/releases/download/v2.11.7-naive2/caddy-forwardproxy-naive.tar.xz"
         tar -xJf /tmp/caddy-naive.tar.xz -C /tmp
         mv /tmp/caddy-forwardproxy-naive/caddy "${DEST}/caddy-naive-linux-amd64"
         rm -rf /tmp/caddy-forwardproxy-naive /tmp/caddy-naive.tar.xz
     else
+        # xcaddy path builds against the caddy v2.11.7 TAG; forwardproxy
+        # e747854e (naive2) calls caddyhttp.IdleTimeoutsFromContext which
+        # exists only on caddy main (post-2.11.7), so xcaddy builds use the
+        # v2.11.7-naive commit. The amd64 prebuilt tarball above is naive2.
+        # Revisit when caddy tags a release carrying that symbol.
         go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.7
-        CGO_ENABLED=0 GOOS=linux GOARCH="${ARCH}" "$(go env GOPATH)/bin/xcaddy" build v2.11.2 \
-            --with github.com/caddyserver/forwardproxy=github.com/klzgrad/forwardproxy@d62c80d3dd2c706b6b87579844d2397bddd18317 \
+        CGO_ENABLED=0 GOOS=linux GOARCH="${ARCH}" "$(go env GOPATH)/bin/xcaddy" build v2.11.7 \
+            --with github.com/caddyserver/forwardproxy=github.com/klzgrad/forwardproxy@c096d6a00cb28e019cc1995b04bdc6a9311d8024 \
             --output "${DEST}/caddy-naive-linux-${ARCH}"
     fi
     chmod +x "${DEST}/caddy-naive-linux-${ARCH}"
 fi
 
+# PIN: caddy-naive = v2.11.7-naive2 (eMudhra block + read_body_idle stream fix).
+# The naive2 tag points at forwardproxy e747854e; pair the client with -5+.
+
 if ! have "naive-client-linux-${ARCH}"; then
     case "$ARCH" in
-        amd64) naive_xz="naiveproxy-v154.0.8037.49-2-linux-x64.tar.xz" ;;
-        arm64) naive_xz="naiveproxy-v154.0.8037.49-2-linux-arm64.tar.xz" ;;
+        amd64) naive_xz="naiveproxy-v154.0.8037.49-5-linux-x64.tar.xz" ;;
+        arm64) naive_xz="naiveproxy-v154.0.8037.49-5-linux-arm64.tar.xz" ;;
         *) echo "no naive-client for ${ARCH}" >&2; exit 1 ;;
     esac
-    fetch -O "/tmp/${naive_xz}" "https://github.com/klzgrad/naiveproxy/releases/download/v154.0.8037.49-2/${naive_xz}"
+    fetch -O "/tmp/${naive_xz}" "https://github.com/klzgrad/naiveproxy/releases/download/v154.0.8037.49-5/${naive_xz}"
     mkdir -p /tmp/naiveclient
     tar -xJf "/tmp/${naive_xz}" -C /tmp/naiveclient
     naive_bin=$(find /tmp/naiveclient -type f -name naive | head -n1)
@@ -79,7 +87,7 @@ if ! have "openflux-linux-${ARCH}"; then
     rm -rf /tmp/openflux
 fi
 
-# CSQTT rust-server (amurcanov/csqtt). PIN ace21228 — not unpinned master.
+# CSQTT rust-server (amurcanov/csqtt). PIN v2.5.0 (fd936ef0) — not unpinned master.
 # Needs rustc 1.97.1 + zig + cargo-zigbuild (release.yml installs them).
 if ! have "csqtt-linux-${ARCH}"; then
     case "$ARCH" in
@@ -93,7 +101,7 @@ if ! have "csqtt-linux-${ARCH}"; then
     cargo zigbuild --help >/dev/null
     git init -q /tmp/csqtt
     git -C /tmp/csqtt remote add origin https://github.com/amurcanov/csqtt.git
-    git -C /tmp/csqtt fetch -q --depth 1 origin ace21228f46f056e4a2ba734f2ecb67361d401ad
+    git -C /tmp/csqtt fetch -q --depth 1 origin fd936ef087c34cc46f26111dc2361f43b8b03c07
     git -C /tmp/csqtt checkout -q FETCH_HEAD
     (
         cd /tmp/csqtt/rust-server
@@ -122,7 +130,7 @@ if ! have "qwdtt-linux-${ARCH}"; then
 fi
 
 if ! have "mieru-linux-${ARCH}" || ! have "mieru-client-linux-${ARCH}"; then
-    git clone --depth 1 --branch v3.38.0 https://github.com/enfein/mieru.git /tmp/mieru
+    git clone --depth 1 --branch v3.39.0 https://github.com/enfein/mieru.git /tmp/mieru
     (
         cd /tmp/mieru
         GOTOOLCHAIN=auto CGO_ENABLED=0 GOOS=linux GOARCH="${ARCH}" go build -trimpath -ldflags="-s -w" -o "${DEST}/mieru-linux-${ARCH}" ./cmd/mita
@@ -134,11 +142,11 @@ fi
 
 if ! have "trusttunnel-linux-${ARCH}"; then
     case "$ARCH" in
-        amd64) tt_tgz="trusttunnel-v1.1.0-linux-x86_64.tar.gz" ;;
-        arm64) tt_tgz="trusttunnel-v1.1.0-linux-aarch64.tar.gz" ;;
+        amd64) tt_tgz="trusttunnel-v1.3.0-beta.2-linux-x86_64.tar.gz" ;;
+        arm64) tt_tgz="trusttunnel-v1.3.0-beta.2-linux-aarch64.tar.gz" ;;
         *) echo "no trusttunnel for ${ARCH}" >&2; exit 1 ;;
     esac
-    fetch -O "/tmp/${tt_tgz}" "https://github.com/TrustTunnel/TrustTunnel/releases/download/v1.1.0/${tt_tgz}"
+    fetch -O "/tmp/${tt_tgz}" "https://github.com/TrustTunnel/TrustTunnel/releases/download/v1.3.0-beta.2/${tt_tgz}"
     mkdir -p /tmp/trusttunnel
     tar -xzf "/tmp/${tt_tgz}" -C /tmp/trusttunnel
     tt_bin=$(find /tmp/trusttunnel -type f -name trusttunnel_endpoint | head -n1)
@@ -149,11 +157,11 @@ fi
 
 if ! have "trusttunnel-client-linux-${ARCH}"; then
     case "$ARCH" in
-        amd64) ttc_tgz="trusttunnel_client-v1.1.7-linux-x86_64.tar.gz" ;;
-        arm64) ttc_tgz="trusttunnel_client-v1.1.7-linux-aarch64.tar.gz" ;;
+        amd64) ttc_tgz="trusttunnel_client-v1.3.0-rc.2-linux-x86_64.tar.gz" ;;
+        arm64) ttc_tgz="trusttunnel_client-v1.3.0-rc.2-linux-aarch64.tar.gz" ;;
         *) echo "no trusttunnel-client for ${ARCH}" >&2; exit 1 ;;
     esac
-    fetch -O "/tmp/${ttc_tgz}" "https://github.com/TrustTunnel/TrustTunnelClient/releases/download/v1.1.7/${ttc_tgz}"
+    fetch -O "/tmp/${ttc_tgz}" "https://github.com/TrustTunnel/TrustTunnelClient/releases/download/v1.3.0-rc.2/${ttc_tgz}"
     mkdir -p /tmp/ttclient
     tar -xzf "/tmp/${ttc_tgz}" -C /tmp/ttclient
     ttc_bin=$(find /tmp/ttclient -type f -name trusttunnel_client | head -n1)
@@ -179,12 +187,16 @@ fi
 
 # Caddy L4 SNI mux — merged build: l4 routing + forwardproxy (naive/cover
 # sites live inside the gateway Caddyfile) + caddylucx l4chan bridge.
-# PIN: caddy v2.11.4 (l4 42db5690 needs it; naive sidecar stays 2.11.2).
+# PIN: caddy v2.11.7 (caddy-l4 4ad6aec1 requires it; #476). l4 post-v0.1.2
+# fixes: UDP session goroutine leak on shutdown, hijacked-conn prefetch pool,
+# proxy_protocol policy pass-through, half_close_timeout, TLS handshake_timeout.
+# forwardproxy stays on c096d6a0 (v2.11.7-naive): e747854e needs the caddy-main
+# symbol caddyhttp.IdleTimeoutsFromContext, absent from the v2.11.7 tag.
 if ! have "caddy-layer4-linux-${ARCH}"; then
     go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.7
-    CGO_ENABLED=0 GOOS=linux GOARCH="${ARCH}" "$(go env GOPATH)/bin/xcaddy" build v2.11.4 \
-        --with github.com/mholt/caddy-l4@42db5690dea199f930a6f08005fe2e4aab10dcc9 \
-        --with github.com/caddyserver/forwardproxy=github.com/klzgrad/forwardproxy@d62c80d3dd2c706b6b87579844d2397bddd18317 \
+    CGO_ENABLED=0 GOOS=linux GOARCH="${ARCH}" "$(go env GOPATH)/bin/xcaddy" build v2.11.7 \
+        --with github.com/mholt/caddy-l4@4ad6aec1ccc6711df47ca444d9b5364b79ea3170 \
+        --with github.com/caddyserver/forwardproxy=github.com/klzgrad/forwardproxy@c096d6a00cb28e019cc1995b04bdc6a9311d8024 \
         --with "github.com/lucx-ui/caddylucx=${ROOT}/caddylucx" \
         --output "${DEST}/caddy-layer4-linux-${ARCH}"
     chmod +x "${DEST}/caddy-layer4-linux-${ARCH}"

@@ -67,6 +67,13 @@ type Instance struct {
 	// health probes. Zero disables the probes (running status only).
 	ProbePort int
 
+	// RunUid launches the child under this uid (Linux only). The routed
+	// anytls shares the lucx-mtproxy uid so the shared uid-REDIRECT egress
+	// bridge (23990) can match its outbound TCP; zero keeps the panel user.
+	// Routed instances also carry the cert/key as ExtraFiles copies so the
+	// uid can read them where the panel-side originals are root-only.
+	RunUid int
+
 	// RouteThroughXray (qWDTT): policy-route kernel TUN ifaces into an Xray
 	// TUN inbound instead of the binary's MASQUERADE. TunName / RouteTable /
 	// RouteIfaces are set only when true; Fingerprint includes them so a
@@ -110,7 +117,7 @@ func (inst Instance) Fingerprint() string {
 			strings.Join(inst.Args, "\x00") + "\x00" +
 			extra + "\x00" +
 			inst.FingerprintExtra + "\x00" +
-			fmt.Sprintf("rtx=%v|tun=%s|tbl=%d", inst.RouteThroughXray, inst.TunName, inst.RouteTable),
+			fmt.Sprintf("rtx=%v|tun=%s|tbl=%d|uid=%d", inst.RouteThroughXray, inst.TunName, inst.RouteTable, inst.RunUid),
 	))
 	return hex.EncodeToString(sum[:16])
 }
@@ -375,6 +382,12 @@ func removeManagedFiles(key string) {
 		return
 	}
 	paths := []string{configPathFor(key, core)}
+	if core == Anytls {
+		paths = append(paths,
+			filepath.Join(workDir(), key+"-cert.pem"),
+			filepath.Join(workDir(), key+"-key.pem"),
+		)
+	}
 	if core == TrustTunnel {
 		paths = append(paths,
 			filepath.Join(workDir(), trustTunnelHostsFileName(key)),
@@ -786,6 +799,18 @@ func writeFileIfChanged(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o600)
 }
 
+// ensureExecutable adds the exec bits when the binary has none. chmod(2) on a
+// file the caller does not own needs CAP_FOWNER, which the sandbox bounding
+// set (install.sh drop-in) does not grant, and the release tarball unpacks
+// sidecars owned by the CI runner uid. An executable binary needs no chmod,
+// so a foreign-owned one must still start.
+func ensureExecutable(bin string, info os.FileInfo, chmod func(string, os.FileMode) error) error {
+	if info.Mode().Perm()&0o111 != 0 {
+		return nil
+	}
+	return chmod(bin, 0o755)
+}
+
 func (m *Manager) start(inst Instance, mc *managed) error {
 	bin := inst.Core.BinaryPath()
 	info, err := os.Stat(bin)
@@ -793,13 +818,34 @@ func (m *Manager) start(inst Instance, mc *managed) error {
 		return fmt.Errorf("tunnel: %s binary not found at %s", inst.Core.DisplayName(), bin)
 	}
 	if runtime.GOOS != "windows" {
-		if err := os.Chmod(bin, 0o755); err != nil {
+		if err := ensureExecutable(bin, info, os.Chmod); err != nil {
 			return fmt.Errorf("tunnel: make %s executable: %w", bin, err)
 		}
 	}
 	key := inst.ManageKey()
 	if err := os.MkdirAll(dataDirFor(key, inst.Core), 0o700); err != nil {
 		return fmt.Errorf("tunnel: create data dir: %w", err)
+	}
+	// Routed instance: chown its assets (extra files like the cert copies and
+	// the data dir) to the bridge uid, then hand the uid to the process.
+	// Chown failure = the sandbox lacks CAP_CHOWN (old unit): fall back to
+	// running as root — egress stays direct until the unit is refreshed.
+	if inst.RunUid > 0 {
+		paths := make([]string, 0, len(inst.ExtraFiles)+1)
+		for name := range inst.ExtraFiles {
+			paths = append(paths, filepath.Join(workDir(), name))
+		}
+		paths = append(paths, dataDirFor(key, inst.Core))
+		gid, err := prepareRunAssets(paths, inst.RunUid)
+		if err != nil {
+			logger.Warningf("tunnel: %s routed egress: chown failed (%v), running as root with direct egress — refresh the unit/drop-in (CAP_CHOWN)", key, err)
+			mc.proc.SetRunUid(0, 0)
+		} else {
+			mc.proc.SetRunUid(inst.RunUid, gid)
+		}
+	} else {
+		// A previous routed lifecycle may have left credentials on the proc.
+		mc.proc.SetRunUid(0, 0)
 	}
 
 	cfgPath := configPathFor(key, inst.Core)
