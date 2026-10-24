@@ -7,12 +7,41 @@
 package sub
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/sha256"
+	"encoding/base64"
 	"strings"
 	"testing"
 
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 	"github.com/mhsanaei/3x-ui/v3/internal/lucx/tunnel"
 )
+
+// csqttPlain opens a csqtt:// link sealed like upstream v2.5.0 (AES-256-GCM,
+// key = SHA256("csqtt-chiper-key"), IV = first 12 bytes) and returns the
+// plaintext "connect?v=2&host=…" payload so tests can assert on its fields.
+func csqttPlain(t *testing.T, link string) string {
+	t.Helper()
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(link, "csqtt://"))
+	if err != nil || len(raw) < 28 {
+		t.Fatalf("csqtt link not decodable: %q (%v)", link, err)
+	}
+	key := sha256.Sum256([]byte("csqtt-chiper-key"))
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := gcm.Open(nil, raw[:12], raw[12:], nil)
+	if err != nil {
+		t.Fatalf("csqtt link does not open: %v", err)
+	}
+	return string(out)
+}
 
 // A qWDTT/CSQTT inbound deployed to a node must advertise the node, not the
 // master: before the fix the master stamped its own outbound IP into subHost
@@ -51,8 +80,8 @@ func TestGenQwdttCsqttLink_NodeInboundUsesNodeAddress(t *testing.T) {
 		{"qwdtt node, empty subHost", s.genQwdttLink(qwdtt("", &nodeID), ""), "peer=13.143.132.172%3A56000"},
 		{"qwdtt node, explicit subHost kept", s.genQwdttLink(qwdtt("fi.example.com:56000", &nodeID), ""), "peer=fi.example.com%3A56000"},
 		{"qwdtt local keeps master subHost", s.genQwdttLink(qwdtt(masterIP+":56000", nil), ""), "peer=2.27.201.120%3A56000"},
-		{"csqtt node, master IP stamped", s.genCsqttLink(csqtt(masterIP, &nodeID)), "host=13.143.132.172"},
-		{"csqtt node, empty subHost", s.genCsqttLink(csqtt("", &nodeID)), "host=13.143.132.172"},
+		{"csqtt node, master IP stamped", csqttPlain(t, s.genCsqttLink(csqtt(masterIP, &nodeID))), "host=13.143.132.172"},
+		{"csqtt node, empty subHost", csqttPlain(t, s.genCsqttLink(csqtt("", &nodeID))), "host=13.143.132.172"},
 	}
 	for _, c := range cases {
 		if !strings.Contains(c.link, c.want) {

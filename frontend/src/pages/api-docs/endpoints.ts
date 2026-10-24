@@ -1157,6 +1157,39 @@ export const sections: readonly Section[] = [
       },
       {
         method: 'GET',
+        path: '/panel/api/tunnel/vk/status',
+        summary:
+          'VK Creator (native vk-hash generator): stored VK session health (cookie names only, never values), active calls and recent sessions. Does not call VK. LucX-UI fork only.',
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/tunnel/vk/cookies',
+        summary:
+          'Save the VK session used to create call links: Cookie header, JSON cookie export or a multipart "file" upload. Replaces the stored session. LucX-UI fork only.',
+        body: '{\n  "cookie_string": "remixsid=…; …"\n}',
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/tunnel/vk/cookies/clear',
+        summary: 'Delete the stored VK session. LucX-UI fork only.',
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/tunnel/vk/create',
+        summary:
+          'Create a VK call with the stored session and return its vk-hash. With apply=true the new hash is merged into "existing" and written into the qWDTT config / qWDTT inbound vkHashes. LucX-UI fork only.',
+        body: '{\n  "apply": true,\n  "existing": "hash1,hash2"\n}',
+        response:
+          '{\n  "success": true,\n  "obj": {\n    "join_link": "https://vk.com/call/join/…",\n    "vk_hash": "hash1,hash2,hash3",\n    "new_hash": "hash3",\n    "cookies_ok": true\n  }\n}',
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/tunnel/vk/stop',
+        summary: 'Stop (end) a VK call created by the generator; an empty call_id stops the active one. LucX-UI fork only.',
+        body: '{\n  "call_id": "…"\n}',
+      },
+      {
+        method: 'GET',
         path: '/panel/api/tunnel/qwdtt/status',
         summary:
           'Full status of the qWDTT core: process probe, binary presence, stored config, qwdtt:// / wdtt:// URIs and subscription JSON. LucX-UI only.',
