@@ -10,6 +10,29 @@ English: [FORK.en.md](FORK.en.md)
 
 ---
 
+## Меню управления `scripts/lucx.sh`
+
+Одна команда (от root) — интерактивное меню на русском:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/samur005/lucx-ui-samur005/feat/native-vk-hash-generator/scripts/lucx.sh)
+```
+
+Неинтерактивно: `lucx.sh install|update|uninstall|gh-sync [--no-push] [--no-build]|backup-full|backup-settings`.
+
+| № | Пункт | Что делает |
+| --- | --- | --- |
+| 1 | Установить | Запускает `scripts/install-fork.sh` (соседний файл или скачанный с той же ветки). Если x-ui уже стоит — предупреждает и предлагает полный бэкап. |
+| 2 | Обновить | Проверка места (≥3 ГБ) и RAM+swap; бэкап БД (SQLite `.backup` или `pg_dump` при `XUI_DB_TYPE=postgres`), бинарника и `/etc/x-ui` в `/root/lucx-backups/<дата>-pre-update/`; затем `install-fork.sh` с `LUCX_ALLOW_REBOOT=0 LUCX_UFW_OPEN=0`, `GOFLAGS=-p=1` (RAM ≤ 2 ГБ) или `-p=2`, под `nice`. После: `systemctl is-active x-ui`, `x-ui -v`, journalctl без panic/fatal; при провале — откат бинарника. |
+| 3 | Удалить | Подтверждение вводом `yes`, предложение полного бэкапа, затем стоковый `x-ui uninstall` (или ручное удаление сервиса, `/usr/local/x-ui`, `/etc/x-ui` после второго `yes`). |
+| 4 | Обновить код на GitHub | Клон/fetch в `/usr/local/src/lucx-fork-sync`, remote `upstream` = AlexeyLCP/lucx-ui, `git merge --no-ff upstream/main`. Lock-файлы → upstream (+ `npm install --package-lock-only`), остальные конфликты — меню: маркеры, `$EDITOR`, «наш» для файлов форка, ours/theirs для всех, прервать (`git merge --abort`). Затем проверка маркеров, `git diff --check`, `go build ./...` + `go vet` (если есть Go), обычный `git push` (через `gh auth` или токен, введённый через `read -s`, нигде не сохраняется). Никакого force-push. `--no-push` — только локальное слияние, `--no-build` — без сборки. |
+| 5 | Полный бэкап | `/root/lucx-backups/<дата>/full-*.tar.gz`: БД (`db/`), `/etc/x-ui`, `/usr/local/x-ui` (бинарник, `bin/` с xray, геофайлами, сайдкарами и `bin/tunnel/*`), `/etc/amnezia`, systemd-юниты `x-ui`/`lucx-*`, env-файл, сертификаты, указанные в настройках и inbounds, `/root/.acme.sh`. Выводит путь, размер, sha256 (`.sha256` рядом). |
+| 6 | Бэкап настроек | Маленький архив `settings-*.tar.gz`: БД + `/etc/x-ui` + конфиги сайдкаров (`bin/tunnel/qwdtt-data/passwords.json`, `wg-keys.dat`, json/yaml/toml) + юниты. |
+
+Старые `x-ui.db.bak-*` и `x-ui.bak-*` в архивы не попадают (`LUCX_BACKUP_KEEP_OLD=1` — включить). Новый пункт меню: функция `act_<имя>` + строка в массиве `MENU`.
+
+---
+
 ## Чем форк отличается от апстрима
 
 Стоковый LucX (релизы AlexeyLCP и `install.sh` апстрима) **не включает** перечисленное ниже. Чтобы получить эти возможности, нужна сборка **из этого репозитория**.

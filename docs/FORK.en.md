@@ -4,6 +4,25 @@ Repo: https://github.com/samur005/lucx-ui-samur005
 Upstream: https://github.com/AlexeyLCP/lucx-ui  
 Full guide (Russian): [FORK.md](FORK.md)
 
+## Management menu `scripts/lucx.sh`
+
+One command (as root), interactive Russian menu:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/samur005/lucx-ui-samur005/feat/native-vk-hash-generator/scripts/lucx.sh)
+```
+
+Non-interactive: `lucx.sh install|update|uninstall|gh-sync [--no-push] [--no-build]|backup-full|backup-settings`.
+
+1. **Install** — runs `scripts/install-fork.sh`; warns and offers a full backup if x-ui is already installed.
+2. **Update** — disk/RAM+swap checks, backs up DB (SQLite `.backup` or `pg_dump` for PostgreSQL), binary and `/etc/x-ui`, runs `install-fork.sh` with `LUCX_ALLOW_REBOOT=0 LUCX_UFW_OPEN=0`, `GOFLAGS=-p=1/-p=2` by RAM, `nice`; then checks `systemctl is-active`, `x-ui -v`, journal for panic/fatal; rolls the binary back on failure.
+3. **Uninstall** — type `yes`, optional full backup, stock `x-ui uninstall` (manual removal fallback).
+4. **Sync code on GitHub** — merges `AlexeyLCP/lucx-ui` `main` into the fork branch in `/usr/local/src/lucx-fork-sync` with `--no-ff`; lock files take upstream, other conflicts get an interactive menu (markers, `$EDITOR`, keep ours for fork files, ours/theirs, abort). Checks markers, `go build`/`go vet` if Go is present, then a plain `git push` (gh auth or a one-shot token read with `read -s`). Never force-pushes. `--no-push`, `--no-build` flags.
+5. **Full backup** — tar.gz in `/root/lucx-backups/<date>/` with DB, `/etc/x-ui`, `/usr/local/x-ui`, sidecar configs, systemd units, referenced certificates; prints size and sha256.
+6. **Settings backup** — DB + `/etc/x-ui` + sidecar configs (qWDTT `passwords.json`, …), small archive.
+
+---
+
 ## What this fork adds (vs AlexeyLCP/lucx-ui)
 
 1. **Native vk-hash auto-generation for qWDTT** — Tunnels → qWDTT → **«Генератор vk_hash» / VK hash generator**: paste VK cookies → create call → fill `VkHashes`. Fallbacks: `LUCX_VK_HASH`, optional external `LUCX_WDTT_*`. Package `internal/lucx/vkcreator/`, API `/panel/api/tunnel/vk/*`. See [VKHASH.md](VKHASH.md), [CREDITS.md](../CREDITS.md).
