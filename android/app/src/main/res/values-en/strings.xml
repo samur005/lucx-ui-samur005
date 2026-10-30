@@ -1,0 +1,23 @@
+<resources>
+    <string name="servers">Servers</string>
+    <string name="add_server">Add server</string>
+    <string name="edit_server">Edit server</string>
+    <string name="name">Name</string>
+    <string name="url_hint">Panel URL, e.g. https://host:29830/path/</string>
+    <string name="allow_insecure">Trust self-signed certificates</string>
+    <string name="save">Save</string>
+    <string name="cancel">Cancel</string>
+    <string name="delete">Delete</string>
+    <string name="open">Open</string>
+    <string name="edit">Edit</string>
+    <string name="no_servers">No servers yet. Add the first one.</string>
+    <string name="invalid_url">Invalid URL (must start with http:// or https://)</string>
+    <string name="switch_server">Switch server</string>
+    <string name="reload">Reload</string>
+    <string name="downloading">Downloading file…</string>
+    <string name="saved_to">Saved: %1$s</string>
+    <string name="download_failed">Download failed</string>
+    <string name="ssl_error">SSL certificate error. Enable trusting self-signed certificates in the server settings.</string>
+    <string name="no_app">No app to open this link</string>
+    <string name="delete_confirm">Delete server?</string>
+</resources>

@@ -3,3 +3,5 @@ build/
 local.properties
 *.jks
 *.keystore
+!app/src/main/
+!app/src/main/**

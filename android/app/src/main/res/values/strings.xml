@@ -1,0 +1,24 @@
+<resources>
+    <string name="app_name">LucX Panel</string>
+    <string name="servers">Серверы</string>
+    <string name="add_server">Добавить сервер</string>
+    <string name="edit_server">Изменить сервер</string>
+    <string name="name">Название</string>
+    <string name="url_hint">URL панели, напр. https://host:29830/path/</string>
+    <string name="allow_insecure">Доверять самоподписанным сертификатам</string>
+    <string name="save">Сохранить</string>
+    <string name="cancel">Отмена</string>
+    <string name="delete">Удалить</string>
+    <string name="open">Открыть</string>
+    <string name="edit">Изменить</string>
+    <string name="no_servers">Нет серверов. Добавьте первый.</string>
+    <string name="invalid_url">Некорректный URL (нужен http:// или https://)</string>
+    <string name="switch_server">Сменить сервер</string>
+    <string name="reload">Обновить</string>
+    <string name="downloading">Загрузка файла…</string>
+    <string name="saved_to">Сохранено: %1$s</string>
+    <string name="download_failed">Ошибка загрузки</string>
+    <string name="ssl_error">Ошибка сертификата SSL. Включите доверие самоподписанным сертификатам в настройках сервера.</string>
+    <string name="no_app">Нет приложения для открытия ссылки</string>
+    <string name="delete_confirm">Удалить сервер?</string>
+</resources>
