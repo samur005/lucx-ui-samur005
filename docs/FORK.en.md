@@ -37,6 +37,54 @@ Stock `install.sh` / panel **Update** / `x-ui update` install the **upstream** b
 
 Until [PR #1](https://github.com/samur005/lucx-ui-samur005/pull/1) merges: use `feat/native-vk-hash-generator`. After merge: use `main`.
 
+## Maintenance menu `lucx.sh`
+
+One command (root), works via curl (no neighbour files needed; `install-fork.sh` is fetched from the same branch; answers are read from `/dev/tty`):
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/samur005/lucx-ui-samur005/feat/native-vk-hash-generator/scripts/lucx.sh)
+```
+
+Non-interactive: `bash <(curl -fsSL https://raw.githubusercontent.com/samur005/lucx-ui-samur005/feat/native-vk-hash-generator/scripts/lucx.sh) <command> [options]` (`help` lists all). Item 33 installs the `lucx` command into `/usr/local/bin`.
+
+| # | Command | Description (menu is in Russian) |
+|---|---------|------|
+| 1 | `prepare` | Server preparation checklist: domain→IP (A/AAAA, Cloudflare proxy warning), OS/arch, NTP, ports 80/443/panel, RAM/swap, disk, GitHub reachability, UFW; ✓/✗ summary and recommended order |
+| 2 | `install` | Install the fork via scripts/install-fork.sh (offers a backup if x-ui exists) |
+| 3 | `update` | Update: resource check, DB (sqlite/pg_dump) + binary backup, install-fork.sh with LUCX_ALLOW_REBOOT=0 LUCX_UFW_OPEN=0, GOFLAGS by RAM, nice; post-check; binary rollback on failure |
+| 4 | `uninstall` | Uninstall: type `yes`, offer full backup, stock `x-ui uninstall` |
+| 5 | `rollback` | Roll back to a previous x-ui.bak-* binary (shows `-v`), verify, revert on failure |
+| 6 | `preflight` | Pre-update check: disk, RAM, Go/Node, GitHub, installed vs fork vs upstream version |
+| 7 | `update-all` | Update all servers from /etc/x-ui/lucx-hosts.conf (nodes first, then master; stop on first error) |
+| 8 | `backup-full` | Full backup (tar.gz + sha256 in /root/lucx-backups/<date>/) |
+| 9 | `backup-settings` | Settings backup (DB, /etc/x-ui, qWDTT passwords.json, sidecar configs) |
+| 10 | `restore` | Restore from an archive (auto-backup of current state, stop/start, verify) |
+| 11 | `backup-cron` | Scheduled backups (cron daily/weekly, rotation, optional Telegram) |
+| 12 | `migrate` | Migrate to a new server (full backup → scp → install → restore → status) |
+| 13 | `status` | Status: version, service, ports, SSL expiry, nodes (from DB), sidecars, RAM/disk |
+| 14 | `logs` | Logs: last N lines, panic/fatal/error filter, follow, sidecars |
+| 15 | `restart` | Restart panel / Xray / sidecar units (warns: x-ui restart drops qWDTT clients ~70 s) |
+| 16 | `reset-access` | Reset access: username/password, webBasePath, port, 2FA (stock `x-ui setting`) |
+| 17 | `ssl` | SSL: stock x-ui menu (acme.sh) for issuing, `acme.sh --cron` renewal; Caddy untouched |
+| 18 | `geo` | Update geoip/geosite (stock `x-ui update-all-geofiles`) |
+| 19 | `xray-core` | Update the Xray core to a chosen version via panel API installXray |
+| 20 | `cleanup` | Cleanup old x-ui.bak-*, old backups, Go/npm caches, build dirs (shows size, asks) |
+| 21 | `monitor` | Telegram monitoring (cron every N min, x-ui + nodes, alerts on failure and recovery) |
+| 22 | `ufw` | UFW: show/open/close panel, subscription and inbound ports (SSH port guarded) |
+| 23 | `bbr` | BBR + fq + limits in /etc/sysctl.d/99-lucx.conf (revertable) |
+| 24 | `swap` | Show/create/grow /swapfile |
+| 25 | `fail2ban` | Fail2ban: sshd + panel login jail (journal 'failed login … IP=') |
+| 26 | `ssh-harden` | SSH port change + key-only login (authorized_keys, UFW, sshd -t, old port kept until confirmed) |
+| 27 | `latency` | Ping/TCP to nodes, which inbound ports listen, optional speedtest |
+| 28 | `qwdtt-clients` | qWDTT clients from passwords.json (no passwords shown); remove zz_test*/lucx-deploy-probe* with backup + SIGHUP |
+| 29 | `sub-check` | Subscription check by subId/email with UA qWDTT-Subscription/1.0 and v2rayN |
+| 30 | `inbounds-export` | Export inbounds to JSON |
+| 31 | `inbounds-import` | Import inbounds from JSON via API (backup first, port/tag conflict warning) |
+| 32 | `gh-sync` | Sync fork with AlexeyLCP/lucx-ui main: merge --no-ff, lock files → upstream, others ours/theirs/editor/abort, marker check, optional go build/vet, plain git push (`--no-push`) |
+| 33 | `self-update` | Self-update: install fresh lucx.sh as /usr/local/bin/lucx |
+
+All changing actions ask for confirmation (dangerous ones require typing `yes`); `--yes`, `--dry-run`, `--show` options. Extend by adding `cmd_<name>` and a `MENU_ITEMS` row.
+
 ## Clean VPS install (from the GitHub fork)
 
 ### Quick install (one command)
