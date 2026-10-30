@@ -295,3 +295,12 @@ ss -tlnp | grep -E '29830|2096'
 Hash-hook-only recovery: `scripts/apply-vkhash.sh` (see Russian doc for curl one-liner), then Part 2.
 
 Full tables and notes: [FORK.md](FORK.md).
+
+## LucX Panel Android app
+
+`android/` contains a simple WebView wrapper for the panel (package `fun.antibs.lucxpanel`, Android 7.0+): multiple servers (name + full panel URL), backup upload/download, pull-to-refresh, system dark theme, per-server option to trust self-signed certificates. No push notifications.
+
+The APK is built by GitHub Actions (`.github/workflows/android-apk.yml`) and published to the `apk-latest` prerelease:
+**[lucx-panel.apk](https://github.com/samur005/lucx-ui-samur005/releases/download/apk-latest/lucx-panel.apk)**
+
+Without `ANDROID_KEYSTORE_*` secrets the APK is signed with a throwaway key, so updating may require uninstalling the previous version.

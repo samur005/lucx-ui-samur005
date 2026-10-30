@@ -1,0 +1,72 @@
+name: Android APK
+
+on:
+  push:
+    paths:
+      - "android/**"
+      - ".github/workflows/android-apk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+      - name: Prepare keystore
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          K_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          K_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "KEYSTORE_PASSWORD=$KS_PASS" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=$K_ALIAS" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=$K_PASS" >> "$GITHUB_ENV"
+          else
+            echo "::warning::No signing secrets; generating throwaway keystore (each build has a different signature)"
+            keytool -genkeypair -v -keystore "$RUNNER_TEMP/release.jks" -storepass android -keypass android \
+              -alias lucx -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=LucX Panel,O=antibs,C=RU"
+          fi
+          echo "KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+      - name: Build release APK
+        run: gradle --no-daemon assembleRelease
+      - name: Rename APK
+        run: cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/lucx-panel.apk" && ls -l "$GITHUB_WORKSPACE/lucx-panel.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lucx-panel-apk
+          path: lucx-panel.apk
+      - name: Publish apk-latest release
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f apk-latest "$GITHUB_SHA"
+          git push -f origin refs/tags/apk-latest
+          NOTES="LucX Panel Android APK, built from ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7} (run #${GITHUB_RUN_NUMBER})."
+          if gh release view apk-latest >/dev/null 2>&1; then
+            gh release edit apk-latest --prerelease --title "LucX Panel APK (latest)" --notes "$NOTES"
+            gh release upload apk-latest lucx-panel.apk --clobber
+          else
+            gh release create apk-latest lucx-panel.apk --prerelease --title "LucX Panel APK (latest)" --notes "$NOTES"
+          fi

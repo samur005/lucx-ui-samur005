@@ -495,3 +495,12 @@ curl -fsSL https://raw.githubusercontent.com/samur005/lucx-ui-samur005/feat/nati
 | [README.ru_RU.md](../README.ru_RU.md) | Короткая витрина форка |
 
 Апстримная документация панели (общий быстрый старт, Docker и т.д.) — в корневом [README.md](../README.md).
+
+## Android-приложение LucX Panel
+
+В каталоге `android/` — простая обёртка WebView для панели (пакет `fun.antibs.lucxpanel`, Android 7.0+): несколько серверов (название + полный URL панели), загрузка/выгрузка бэкапов, pull-to-refresh, тёмная тема по системе, опция доверия самоподписанным сертификатам для конкретного сервера. Push-уведомлений нет.
+
+APK собирается в GitHub Actions (`.github/workflows/android-apk.yml`) и публикуется в пре-релиз `apk-latest`:
+**[lucx-panel.apk](https://github.com/samur005/lucx-ui-samur005/releases/download/apk-latest/lucx-panel.apk)**
+
+Без секретов `ANDROID_KEYSTORE_*` APK подписывается временным ключом — при обновлении может понадобиться удалить старую версию.
