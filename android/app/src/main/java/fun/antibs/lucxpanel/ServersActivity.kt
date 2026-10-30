@@ -296,8 +296,9 @@ class ServersActivity : AppCompatActivity() {
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         if (style == Prefs.STYLE_GRID) menu.add(0, 1, 0, R.string.add_server).setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
-        menu.add(0, 2, 1, R.string.settings).setIcon(R.drawable.ic_settings).setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
-            .icon?.setTint(if (style == Prefs.STYLE_MINIMAL) getColor(R.color.accent) else Color.WHITE)
+        val gear = menu.add(0, 2, 1, R.string.settings).setIcon(R.drawable.ic_settings)
+        gear.setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+        gear.icon?.mutate()?.setTint(if (style == Prefs.STYLE_MINIMAL) getColor(R.color.accent) else Color.WHITE)
         return true
     }
 
