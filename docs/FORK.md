@@ -138,61 +138,58 @@ Android-приложение qWDTT (SpaceNeuroX) читает тело подп�
 
 ---
 
-## Меню обслуживания `lucx.sh` (установка, обновление, бэкапы, GitHub)
-
-Одна команда (root), работает через curl — соседние файлы не нужны, `install-fork.sh` скачивается с той же ветки, ответы читаются из `/dev/tty`:
+## Меню обслуживания `lucx.sh`
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/samur005/lucx-ui-samur005/feat/native-vk-hash-generator/scripts/lucx.sh)
 ```
 
-Неинтерактивно: `bash <(curl -fsSL https://raw.githubusercontent.com/samur005/lucx-ui-samur005/feat/native-vk-hash-generator/scripts/lucx.sh) <команда> [опции]`, например `… update`, `… backup-settings`, `… status`, `… help`.
-Пункт 33 ставит команду `lucx` в `/usr/local/bin` — дальше просто `lucx`.
+Простое текстовое меню: список пунктов с номерами, выбор — ввод цифры и Enter (ввод читается из `/dev/tty`, работает через `curl | bash`). Подменю тоже нумерованы, `0` — назад/выход. Служебные пункты: `90` — показать все пункты (не только для роли сервера), `91` — dry-run вкл/выкл, `92` — язык RU/EN. Опасные действия спрашивают подтверждение и делают бэкап. Неинтерактивно: `lucx <команда> [--yes] [--dry-run] …`, справка — `lucx help`. Журнал: `/var/log/lucx.log`, ключи облака — `/etc/x-ui/lucx-backup.env` (600).
 
 | № | Команда | Что делает |
-|---|---------|-----------|
+|---|---|---|
 | 1 | `prepare` | С чего начать / подготовка сервера — домен→IP, время, порты, RAM, GitHub; чек-лист ✓/✗ |
-| 2 | `install` | Установить — сборка и установка форка (install-fork.sh) |
-| 3 | `update` | Обновить — бэкап БД и бинарника, сборка, проверка, авто-откат |
-| 4 | `uninstall` | Удалить — стоковый x-ui uninstall, перед этим полный бэкап |
-| 5 | `rollback` | Откат на предыдущую версию — выбор из x-ui.bak-*, проверка, возврат при сбое |
-| 6 | `preflight` | Проверка перед обновлением — диск, RAM, Go/Node, GitHub, новые версии |
-| 7 | `update-all` | Обновить все серверы — по списку /etc/x-ui/lucx-hosts.conf: узлы, затем мастер |
-| 8 | `backup-full` | Полный бэкап — БД, /etc/x-ui, /usr/local/x-ui, сайдкары, юниты, сертификаты |
-| 9 | `backup-settings` | Бэкап настроек — БД, /etc/x-ui, passwords.json, конфиги сайдкаров |
-| 10 | `restore` | Восстановить из бэкапа — выбор архива, бэкап текущего, рестарт, проверка |
-| 11 | `backup-cron` | Бэкап по расписанию — cron, ротация, отправка в Telegram |
-| 12 | `migrate` | Миграция на новый сервер — бэкап → scp → установка → восстановление |
-| 13 | `status` | Статус — версия, сервис, порты, SSL, узлы, сайдкары, RAM/диск |
-| 14 | `logs` | Логи — x-ui и сайдкары, фильтр ошибок, follow |
-| 15 | `restart` | Перезапуск — панель / Xray / сайдкары |
-| 16 | `reset-access` | Сброс доступа — логин, пароль, путь, порт, 2FA |
-| 17 | `ssl` | SSL — выпуск (стоковое меню x-ui/acme.sh) и продление |
-| 18 | `geo` | Обновить геобазы — geoip/geosite без пересборки панели |
-| 19 | `xray-core` | Обновить ядро Xray — выбор версии, через API панели |
-| 20 | `cleanup` | Очистка — старые x-ui.bak, бэкапы, кэш Go/npm |
-| 21 | `monitor` | Мониторинг в Telegram — x-ui и узлы, уведомление о сбое/восстановлении |
-| 22 | `ufw` | Firewall (UFW) — показать/открыть/закрыть порты панели и инбаундов |
-| 23 | `bbr` | BBR и тюнинг сети — BBR, fq, лимиты, sysctl (с откатом) |
-| 24 | `swap` | Swap — показать, создать или увеличить swapfile |
-| 25 | `fail2ban` | Fail2ban — защита SSH и входа в панель |
-| 26 | `ssh-harden` | Порт SSH и вход по ключу — с проверками, старый порт до подтверждения |
-| 27 | `latency` | Задержка до узлов и порты — ping/tcp к узлам, слушают ли инбаунды |
-| 28 | `qwdtt-clients` | Клиенты qWDTT — список устройств, удаление тестовых записей |
-| 29 | `sub-check` | Проверка подписки — по subId/email: узлы, срок, трафик |
-| 30 | `inbounds-export` | Экспорт инбаундов — в JSON-файл |
-| 31 | `inbounds-import` | Импорт инбаундов — из JSON через API, с бэкапом |
-| 32 | `gh-sync` | Обновить код на GitHub — слить upstream AlexeyLCP/lucx-ui в форк, конфликты, push |
-| 33 | `self-update` | Самообновление / команда lucx — скачать свежий lucx.sh в /usr/local/bin/lucx |
-
-Детали:
-- **Обновить**: проверка диска/RAM/swap → бэкап БД (`/etc/x-ui/x-ui.db` через `sqlite3 .backup`, либо `pg_dump`, если в `/etc/default/x-ui` `XUI_DB_TYPE=postgres`) в `/root/lucx-backups/pre-update-*` и бинарника в `x-ui.bak-*` → `install-fork.sh` c `LUCX_ALLOW_REBOOT=0 LUCX_UFW_OPEN=0`, `GOFLAGS=-p=1` (RAM ≤ 2 ГБ) или `-p=2`, `nice` → проверка (`systemctl is-active`, `x-ui -v`, journalctl без panic/fatal) → при провале откат бинарника.
-- **Бэкапы**: `/root/lucx-backups/<дата>/lucx-<full|settings>-<host>-<дата>.tar.gz` + `.sha256` (chmod 600). Настройки: БД, `/etc/x-ui` (без старых `x-ui.db.bak*`), env-файл, `bin/tunnel/qwdtt-data` (passwords.json, wg-keys.dat), конфиги сайдкаров `bin/tunnel/*.json|*.caddyfile`, `bin/config.json`. Полный: плюс весь `/usr/local/x-ui` (без старых `x-ui.bak-*`), юниты `x-ui`/`lucx-*`/tproxy/mtproto, `/etc/amnezia`, `/root/.acme.sh`, `/root/cert`. Восстановление: `tar -xzf … -C /`.
-- **Обновить код на GitHub** (`gh-sync [--no-push]`): клон в `/usr/local/src/lucx-fork-sync`, remote `upstream` = AlexeyLCP/lucx-ui, `git merge --no-ff upstream/main`. Lock-файлы (`pnpm-lock.yaml`, `package-lock.json`, `go.sum`) → версия upstream автоматически; прочие конфликты — выбор: «наш» (по умолчанию для файлов форка: qwdtt_app_sub, client_sidecar_settings, client_inbound_apply, vkcreator/wbcreator, qwdtt_users, скрипты, docs/FORK*, CREDITS), upstream, `$EDITOR`, прервать (`git merge --abort`). Затем проверка маркеров, `go build`/`go vet` (если есть Go и RAM; `LUCX_SKIP_BUILD=1` — пропустить) и обычный `git push` (через `gh` или одноразовый токен, не сохраняется). Без терминала конфликты не решаются — слияние прерывается.
-- **Обновить все серверы**: `/etc/x-ui/lucx-hosts.conf` (`node|master host port user key|pass`, `master local` — этот сервер); пароли не хранятся, спрашиваются.
-- **Мониторинг/бэкап в Telegram**: токен и chat_id в `/etc/x-ui/lucx-backup.env` (600), cron `/etc/cron.d/lucx-monitor` и `/etc/cron.d/lucx-backup`.
-- Все меняющие действия спрашивают подтверждение (опасные — вводом `yes`); `--yes` — согласиться, `--dry-run` — только напечатать команды; `--show` для ufw/bbr/swap/qwdtt-clients — только показать.
-- Расширение: функция `cmd_<имя>` + строка в `MENU_ITEMS`.
+| 2 | `role` | Роль сервера — мастер / узел / одиночный (по БД) |
+| 3 | `install` | Установить — сборка и установка форка (install-fork.sh) |
+| 4 | `update` | Обновить — бэкап БД и бинарника, сборка, проверка, авто-откат |
+| 5 | `uninstall` | Удалить — стоковый x-ui uninstall, перед этим полный бэкап |
+| 6 | `rollback` | Откат на предыдущую версию — выбор из x-ui.bak-*, проверка, возврат при сбое |
+| 7 | `preflight` | Проверка перед обновлением — диск, RAM, Go/Node, GitHub, новые версии |
+| 8 | `update-all` | Обновить все серверы — по списку lucx-hosts.conf: узлы, затем мастер |
+| 9 | `backup-full` | Полный бэкап — БД, /etc/x-ui, /usr/local/x-ui, сайдкары, юниты, сертификаты |
+| 10 | `backup-settings` | Бэкап настроек — БД, /etc/x-ui, passwords.json, конфиги сайдкаров |
+| 11 | `restore` | Восстановить из бэкапа — выбор архива, бэкап текущего, рестарт, проверка |
+| 12 | `backup-cron` | Бэкап по расписанию — cron, ротация, отправка в Telegram |
+| 13 | `cloud-sync` | Бэкапы в облако — Яндекс Диск (WebDAV) / S3 (rclone, aws-cli) |
+| 14 | `migrate` | Миграция на новый сервер — бэкап → scp → установка → восстановление |
+| 15 | `db-migrate` | SQLite ↔ PostgreSQL — штатный x-ui migrate-db (обратно — из бэкапа) |
+| 16 | `status` | Статус — версия, сервис, порты, SSL, узлы, сайдкары, RAM/диск |
+| 17 | `logs` | Логи — x-ui и сайдкары, фильтр ошибок, follow |
+| 18 | `restart` | Перезапуск — панель / Xray / сайдкары |
+| 19 | `reset-access` | Сброс доступа — логин, пароль, путь, порт, 2FA |
+| 20 | `ssl` | SSL — выпуск (стоковое меню x-ui/acme.sh) и продление |
+| 21 | `geo` | Обновить геобазы — geoip/geosite без пересборки панели |
+| 22 | `xray-core` | Обновить ядро Xray — выбор версии, через API панели |
+| 23 | `cleanup` | Очистка — старые x-ui.bak, бэкапы, кэш Go/npm |
+| 24 | `monitor` | Мониторинг в Telegram — x-ui и узлы, уведомление о сбое/восстановлении |
+| 25 | `ufw` | Firewall (UFW) — показать/открыть/закрыть порты панели и инбаундов |
+| 26 | `bbr` | BBR и тюнинг сети — BBR, fq, лимиты, sysctl (с откатом) |
+| 27 | `swap` | Swap — показать, создать или увеличить swapfile |
+| 28 | `fail2ban` | Fail2ban — защита SSH и входа в панель |
+| 29 | `ssh-harden` | Порт SSH и вход по ключу — с проверками, старый порт до подтверждения |
+| 30 | `latency` | Задержка до узлов и порты — ping/tcp к узлам, слушают ли инбаунды |
+| 31 | `reality-check` | Проверка Reality-маскировки — донор доступен, TLS 1.3, h2 |
+| 32 | `reality-rotate` | Ротация ключей Reality — новые ключи и shortId (клиентам обновить подписку) |
+| 33 | `qwdtt-clients` | Клиенты qWDTT — список устройств, удаление тестовых записей |
+| 34 | `sub-check` | Проверка подписки — по subId/email: узлы, срок, трафик |
+| 35 | `traffic-report` | Отчёт по трафику — топ клиентов, скоро истекают, ≥90% лимита |
+| 36 | `clients-bulk` | Массовые действия с клиентами — продлить, сбросить трафик, вкл/выкл (по инбаунду/маске) |
+| 37 | `hwid-reset` | Сброс HWID клиента — удалить привязанные устройства (client_hwids) |
+| 38 | `inbounds-export` | Экспорт инбаундов — в JSON-файл |
+| 39 | `inbounds-import` | Импорт инбаундов — из JSON через API, с бэкапом |
+| 40 | `node-link` | Подключение узла к мастеру — проверка связи и что ввести в панели мастера |
+| 41 | `gh-sync` | Обновить код на GitHub — слить upstream AlexeyLCP/lucx-ui в форк, конфликты, push |
+| 42 | `self-update` | Самообновление / команда lucx — скачать свежий lucx.sh в /usr/local/bin/lucx |
 
 ## Установка на чистый VPS (из GitHub-форка)
 

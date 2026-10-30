@@ -31,6 +31,7 @@ BACKUP_ROOT="${LUCX_BACKUP_ROOT:-/root/lucx-backups}"
 TG_ENV="${XUI_ETC}/lucx-backup.env"
 HOSTS_CONF="${XUI_ETC}/lucx-hosts.conf"
 SYSCTL_FILE="/etc/sysctl.d/99-lucx.conf"
+LUCX_LANG="${LUCX_LANG:-ru}"
 LUCX_DRY_RUN="${LUCX_DRY_RUN:-0}"   # 1 = печатать меняющие команды, не выполнять
 ASSUME_YES=0
 NO_PUSH=0
@@ -608,7 +609,7 @@ cmd_restart() {
         1|panel) warn "Рестарт x-ui рвёт клиентов qWDTT примерно на 70 с."; confirm "Перезапустить x-ui?" && run systemctl restart x-ui && { [[ $LUCX_DRY_RUN == 1 ]] || verify_panel; } ;;
         2|xray) confirm "Перезапустить Xray (через x-ui restart-xray / API)?" || return 0
             if "$XUI_BIN" help 2>&1 | grep -q restart-xray; then run "$XUI_BIN" restart-xray
-            else api_call POST /panel/api/server/restartXrayService && ok "Xray перезапущен"; fi ;;
+            else run api_call POST /panel/api/server/restartXrayService && ok "Xray перезапущен"; fi ;;
         3|sidecars) local u; for u in $(sidecar_units | grep -v '^x-ui\|@'); do confirm "Перезапустить $u?" && run systemctl restart "$u"; done
             info "qWDTT/olcRTC запускаются панелью — их перезапускает рестарт x-ui." ;;
     esac
@@ -701,7 +702,7 @@ cmd_cleanup() {
     printf '   %s\n' "${del[@]}"
     info "Освободится: $(du -csh "${del[@]}" 2>/dev/null | tail -1 | cut -f1)"
     confirm "Удалить перечисленное?" || return 0
-    if [[ -d /root/go/pkg/mod ]]; then chmod -R u+w /root/go/pkg/mod 2>/dev/null; fi
+    if [[ -d /root/go/pkg/mod ]]; then run chmod -R u+w /root/go/pkg/mod 2>/dev/null; fi
     run rm -rf "${del[@]}" && ok "Очищено"
 }
 
@@ -935,10 +936,10 @@ cmd_sub_check() {
     [[ -z $q ]] && { ask "subId или email клиента" ""; q="$REPLY"; }
     [[ -n $q ]] || return 0
     local sid
-    sid=$(sql "SELECT json_extract(c.value,'\$.subId') FROM inbounds i, json_each(json_extract(i.settings,'\$.clients')) c WHERE json_extract(c.value,'\$.email')='${q//\'/}' LIMIT 1;")
+    sid=$(sql "SELECT json_extract(c.value,'\$.subId') FROM inbounds i, json_each(json_extract(i.settings,'\$.clients')) c WHERE json_valid(i.settings) AND json_extract(c.value,'\$.email')='${q//\'/}' LIMIT 1;")
     [[ -n $sid ]] || sid="$q"
     info "subId: ${sid:-?}"
-    sql "SELECT email,up,down,total,expiry_time,enable FROM client_traffics WHERE email IN (SELECT json_extract(c.value,'\$.email') FROM inbounds i, json_each(json_extract(i.settings,'\$.clients')) c WHERE json_extract(c.value,'\$.subId')='${sid//\'/}');" | \
+    sql "SELECT email,up,down,total,expiry_time,enable FROM client_traffics WHERE email IN (SELECT json_extract(c.value,'\$.email') FROM inbounds i, json_each(json_extract(i.settings,'\$.clients')) c WHERE json_valid(i.settings) AND json_extract(c.value,'\$.subId')='${sid//\'/}');" | \
         while IFS='|' read -r e u d t x en; do
             printf '   %-30s трафик %s МБ / %s  истекает %s  %s\n' "$e" $(((u+d)/1048576)) "$([[ $t == 0 ]] && echo ∞ || echo "$((t/1048576)) МБ")" "$([[ $x == 0 ]] && echo никогда || date -d "@$((x/1000))" '+%F %R')" "$([[ $en == 1 ]] && echo вкл || echo выкл)"
         done
@@ -1055,21 +1056,232 @@ resolve_conflicts() {
     warn "Конфликты, требующие решения:"
     for f in "${rest[@]}"; do printf '   %s %s\n' "$f" "$(is_fork_file "$f" && echo "${C_Y}(файл форка)${C_0}")"; done
     has_tty || { err "Нет терминала — решить нельзя."; return 1; }
-    echo " a) авто: файлы форка → «наш», остальные → спросить   x) прервать"
     for f in "${rest[@]}"; do
-        local def="t"; is_fork_file "$f" && def="o"
+        local def="2"; is_fork_file "$f" && def="1"
         while :; do
-            ask "$f: [o]наш / [t]upstream / [e]редактор / [x]прервать" "$def"
+            ask "$f: 1) наш  2) upstream  3) редактор  0) прервать" "$def"
             case "$REPLY" in
-                o) git checkout --ours -- "$f" && git add -- "$f"; break ;;
-                t) git checkout --theirs -- "$f" && git add -- "$f"; break ;;
-                e) "${EDITOR:-nano}" "$f" <"$TTY" >"$TTY"; if grep -qE '^(<<<<<<<|=======|>>>>>>>)( |$)' "$f"; then warn "Маркеры остались"; else git add -- "$f"; break; fi ;;
-                x) return 1 ;;
+                1) git checkout --ours -- "$f" && git add -- "$f"; break ;;
+                2) git checkout --theirs -- "$f" && git add -- "$f"; break ;;
+                3) "${EDITOR:-nano}" "$f" <"$TTY" >"$TTY"; if grep -qE '^(<<<<<<<|=======|>>>>>>>)( |$)' "$f"; then warn "Маркеры остались"; else git add -- "$f"; break; fi ;;
+                0) return 1 ;;
             esac
         done
     done
     [[ -z $(git diff --name-only --diff-filter=U) ]]
 }
+
+# ---------- Роль, узлы ----------
+# master: в БД есть узлы; node: есть API-токен scope=node-sync (мастер ходит сюда); иначе single.
+detect_role() {
+    local n t
+    n=$(sql "SELECT count(*) FROM nodes;"); t=$(sql "SELECT count(*) FROM api_tokens WHERE scope='node-sync';")
+    if [[ ${n:-0} -gt 0 ]]; then echo master; elif [[ ${t:-0} -gt 0 ]]; then echo node; else echo single; fi
+}
+cmd_role() {
+    hdr "Роль сервера"
+    local r; r=$(detect_role)
+    case "$r" in
+        master) ok "Мастер: узлов в БД — $(sql 'SELECT count(*) FROM nodes;')" ;;
+        node)   ok "Узел: есть API-токен node-sync (мастер подключается сюда)" ;;
+        *)      info "Одиночный сервер (узлов нет, токена node-sync нет) — можно сделать мастером или узлом" ;;
+    esac
+    echo "Меню показывает пункты для роли «$r»; пункт 90 в меню — показать все."
+}
+cmd_node_link() {
+    hdr "Подключение узла к мастеру"
+    local r; r=$(detect_role)
+    if [[ $r == master ]]; then
+        info "Проверка связи мастер → узлы (адрес:порт панели узла):"
+        local name sch addr port bp st
+        while IFS='|' read -r name sch addr port bp st; do
+            [[ -z $name ]] && continue
+            local code; code=$(curl -ks -o /dev/null -w '%{http_code}' --max-time 8 "${sch:-https}://$addr:$port${bp:-/}" 2>/dev/null)
+            printf '   %-18s %s://%s:%s%s  HTTP %s  статус в БД: %s\n' "$name" "${sch:-https}" "$addr" "$port" "${bp:-/}" "${code:-нет}" "$st"
+        done < <(sql "SELECT name,scheme,address,port,base_path,status FROM nodes ORDER BY id;")
+    fi
+    cat <<TXT
+
+${C_W}Как подключить узел:${C_0}
+ 1. На УЗЛЕ установите форк (пункт «Установить»), откройте порт панели узла в UFW
+    (лучше только для IP мастера: ufw allow from <IP мастера> to any port $(panel_port) proto tcp).
+ 2. На УЗЛЕ выпустите токен: ${C_C}x-ui setting -getApiToken -tokenName master -tokenScope node-sync${C_0}
+    (показывается один раз; повторный вызов перевыпускает токен с этим именем).
+ 3. В панели МАСТЕРА: «Узлы» → «Добавить»: схема (https при SSL), адрес узла, порт панели узла
+    ($(panel_port) здесь), путь панели узла ($(panel_path) здесь), API-токен из шага 2.
+TXT
+    if [[ $r != master ]]; then
+        ask "IP/домен мастера для проверки связи (Enter — пропустить)" ""
+        [[ -n $REPLY ]] || return 0
+        local m="$REPLY"
+        ping -c 2 -W 2 "$m" >/dev/null 2>&1 && ok "ping $m — есть" || warn "ping $m — нет (может быть закрыт ICMP)"
+        info "Мастер должен достучаться до этого узла: $(public_ip):$(panel_port) — проверьте, что порт открыт в UFW для IP мастера."
+    fi
+}
+
+# ---------- Массовые действия с клиентами (через API панели) ----------
+# Выбор клиентов: по id инбаунда и/или маске email (glob). Срок подписки панель
+# пересчитывает сама (bulkAdjust трогает и clients, и client_traffics.expiry_time).
+select_emails() {
+    ask "ID инбаунда (Enter — все)" "${OPT_INBOUND:-}"; local ib="$REPLY"
+    ask "Маска email (glob, например user_*; Enter — все)" "${OPT_MASK:-*}"; local mask="$REPLY"
+    local glob; glob=${mask//\'/}
+    local where="json_valid(i.settings)"; [[ $ib =~ ^[0-9]+$ ]] && where+=" AND i.id=$ib"
+    mapfile -t SEL_EMAILS < <(sql "SELECT DISTINCT json_extract(c.value,'\$.email') FROM inbounds i, json_each(json_extract(i.settings,'\$.clients')) c WHERE $where AND json_extract(c.value,'\$.email') GLOB '$glob' ORDER BY 1;")
+    info "Выбрано клиентов: ${#SEL_EMAILS[@]}"
+    (( ${#SEL_EMAILS[@]} )) && printf '   %s\n' "${SEL_EMAILS[@]:0:15}" && (( ${#SEL_EMAILS[@]} > 15 )) && echo "   …"
+    (( ${#SEL_EMAILS[@]} ))
+}
+emails_json() { printf '%s\n' "${SEL_EMAILS[@]}" | jq -R . | jq -sc '{emails: .}'; }
+cmd_clients_bulk() {
+    need_root; need_xui; have jq || die "Нужен jq"
+    hdr "Массовые действия с клиентами"
+    echo " 1) продлить срок на N дней  2) сбросить трафик  3) включить  4) отключить  0) назад"
+    ask "Выбор" "0"; local act="$REPLY"; [[ $act =~ ^[1-4]$ ]] || return 0
+    local -a SEL_EMAILS=(); select_emails || return 0
+    local body path days
+    body=$(emails_json)
+    case "$act" in
+        1) ask "На сколько дней продлить" "30"; days="$REPLY"; [[ $days =~ ^-?[0-9]+$ ]] || return 0
+           body=$(jq -c --argjson d "$days" '. + {addDays: $d}' <<<"$body"); path=/panel/api/clients/bulkAdjust ;;
+        2) path=/panel/api/clients/bulkResetTraffic ;;
+        3) path=/panel/api/clients/bulkEnable ;;
+        4) path=/panel/api/clients/bulkDisable ;;
+    esac
+    confirm "Применить к ${#SEL_EMAILS[@]} клиентам ($path)?" || return 0
+    [[ $LUCX_DRY_RUN == 1 ]] || make_backup settings || return 1
+    if [[ $LUCX_DRY_RUN == 1 ]]; then echo "[dry-run] POST $path $body"; return 0; fi
+    api_call POST "$path" "$body" | jq -c '{success, msg}'
+}
+
+cmd_traffic_report() {
+    hdr "Отчёт по трафику"
+    local now; now=$(( $(date +%s) * 1000 ))
+    info "Топ-15 клиентов по трафику:"
+    sql "SELECT email,(up+down)/1048576,total/1048576 FROM client_traffics ORDER BY up+down DESC LIMIT 15;" | \
+        awk -F'|' '{printf "   %-34s %8s МБ  лимит %s\n",$1,$2,($3==0?"∞":$3" МБ")}'
+    info "Срок истекает в ближайшие ${OPT_DAYS:-7} дней:"
+    sql "SELECT email,datetime(expiry_time/1000,'unixepoch','localtime') FROM client_traffics WHERE expiry_time>0 AND expiry_time BETWEEN $now AND $now+${OPT_DAYS:-7}*86400000 ORDER BY expiry_time;" | sed 's/|/  до /; s/^/   /'
+    info "Уже истекли: $(sql "SELECT count(*) FROM client_traffics WHERE expiry_time>0 AND expiry_time<$now;")"
+    info "Израсходовано ≥90% лимита:"
+    sql "SELECT email,(up+down)*100/total FROM client_traffics WHERE total>0 AND (up+down)*10>=total*9 ORDER BY 2 DESC;" | sed 's/|/  /; s/$/%/; s/^/   /'
+}
+
+cmd_hwid_reset() {
+    need_root; need_xui
+    hdr "Сброс HWID / устройств клиента"
+    ask "Email клиента" "${OPT_ARG:-}"; local e="$REPLY"; [[ -n $e ]] || return 0
+    local sid; sid=$(sql "SELECT json_extract(c.value,'\$.subId') FROM inbounds i, json_each(json_extract(i.settings,'\$.clients')) c WHERE json_valid(i.settings) AND json_extract(c.value,'\$.email')='${e//\'/}' LIMIT 1;")
+    info "subId: ${sid:-?}; устройства (client_hwids):"
+    sql "SELECT id,device_os,device_model,datetime(last_seen,'unixepoch','localtime') FROM client_hwids WHERE sub_id='${sid//\'/}';" | sed 's/^/   /'
+    confirm "Удалить все HWID клиента $e (через API панели)?" || return 0
+    if [[ $LUCX_DRY_RUN == 1 ]]; then echo "[dry-run] DELETE /panel/api/clients/hwids/$e"; return 0; fi
+    api_call DELETE "/panel/api/clients/hwids/$(jq -rn --arg s "$e" '$s|@uri')" | jq -c '{success, msg}' 2>/dev/null
+    info "Устройства qWDTT (личные пароли) — отдельно, см. пункт «Клиенты qWDTT»."
+}
+
+reality_inbounds() { sql "SELECT id,port,remark,stream_settings FROM inbounds WHERE json_valid(stream_settings) AND json_extract(stream_settings,'\$.security')='reality';"; }
+cmd_reality_check() {
+    hdr "Проверка Reality-маскировки"
+    local id port rem ss
+    while IFS='|' read -r id port rem ss; do
+        [[ -z $id ]] && continue
+        local dest sni host dport out
+        dest=$(jq -r '.realitySettings | (.target // .dest // "")' <<<"$ss"); sni=$(jq -r '.realitySettings.serverNames[0] // ""' <<<"$ss")
+        host=${dest%:*}; dport=${dest##*:}; [[ $dport == "$dest" ]] && dport=443
+        printf '\n   #%s порт %s «%s»: донор %s, SNI %s\n' "$id" "$port" "$rem" "$dest" "$sni"
+        out=$(timeout 10 openssl s_client -connect "$host:$dport" -servername "${sni:-$host}" -tls1_3 -alpn h2 </dev/null 2>&1)
+        grep -q 'Protocol *: TLSv1.3\|New, TLSv1.3' <<<"$out" && ok "TLS 1.3" || err "TLS 1.3 нет / донор недоступен"
+        grep -q 'ALPN protocol: h2' <<<"$out" && ok "h2 (ALPN)" || warn "h2 не согласован"
+        local code; code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 --resolve "${sni:-$host}:$dport:$(getent ahostsv4 "$host" | awk 'NR==1{print $1}')" "https://${sni:-$host}:$dport/")
+        info "HTTPS-ответ донора: ${code:-нет}"
+    done < <(reality_inbounds)
+}
+
+cmd_reality_rotate() {
+    need_root; need_xui; have jq || die "Нужен jq"
+    hdr "Ротация ключей Reality и shortId"
+    local x; x=$(xray_bin); [[ -n $x ]] || die "Нет бинарника Xray"
+    reality_inbounds | cut -d'|' -f1-3 | sed 's/^/   /'
+    ask "ID инбаунда (0 — отмена)" "0"; local id="$REPLY"; [[ $id =~ ^[1-9][0-9]*$ ]] || return 0
+    warn "После ротации ВСЕ клиенты этого инбаунда должны обновить подписку, иначе отвалятся."
+    confirm_yes "Сгенерировать новые privateKey/publicKey/shortIds для инбаунда #$id" || return 0
+    local kp priv pub sid
+    kp=$("$x" x25519); priv=$(awk -F': ' '/^Private/{print $2}' <<<"$kp"); pub=$(awk -F': ' '/^Public|^Password/{print $2; exit}' <<<"$kp")
+    sid=$(openssl rand -hex 8)
+    [[ -n $priv && -n $pub ]] || die "Не разобрал вывод xray x25519"
+    [[ $LUCX_DRY_RUN == 1 ]] && { echo "[dry-run] update inbound #$id: новая пара ключей, shortIds=[$sid]"; return 0; }
+    make_backup settings || return 1
+    local cur; cur=$(api_call GET "/panel/api/inbounds/get/$id") || return 1
+    local upd
+    upd=$(jq -c --arg p "$priv" --arg k "$pub" --arg s "$sid" '.obj | .streamSettings = (.streamSettings|fromjson
+            | .realitySettings.privateKey=$p | .realitySettings.settings.publicKey=$k | .realitySettings.shortIds=[$s] | tojson)' <<<"$cur") || die "Не разобрал инбаунд"
+    api_call POST "/panel/api/inbounds/update/$id" "$upd" | jq -c '{success, msg}'
+    ok "Новый shortId: $sid. Бэкап до изменения: $LAST_BACKUP"
+}
+
+cmd_db_migrate() {
+    need_root; need_xui
+    hdr "Перенос SQLite ↔ PostgreSQL"
+    info "Сейчас: $(db_kind). Используется штатная команда панели: x-ui migrate-db"
+    "$XUI_BIN" migrate-db -h 2>&1 | sed 's/^/   /' | head -12
+    echo " 1) SQLite → PostgreSQL (копия в --dsn)  2) SQLite → текстовый дамп (.dump)  0) назад"
+    ask "Выбор" "0"
+    case "$REPLY" in
+        1) [[ $(db_kind) == sqlite ]] || die "Панель уже на PostgreSQL"
+           ask_secret "DSN PostgreSQL (postgres://user:pass@host:5432/db?sslmode=disable)" || return 1; local dsn="$REPLY"
+           confirm_yes "Скопировать $XUI_DB в PostgreSQL" || return 0
+           make_backup settings || return 1
+           run systemctl stop x-ui
+           run "$XUI_BIN" migrate-db -dsn "$dsn"; local rc=$?
+           run systemctl start x-ui
+           (( rc == 0 )) && cat <<TXT
+Данные скопированы. Чтобы панель работала на PostgreSQL, пропишите в $(xui_env_file):
+  XUI_DB_TYPE=postgres
+  XUI_DB_DSN=<ваш DSN>
+и перезапустите x-ui (пункт «Перезапуск»). Обратно: штатного переноса PostgreSQL → SQLite в панели нет —
+используйте бэкап SQLite (он сделан выше) и уберите XUI_DB_TYPE.
+TXT
+           ;;
+        2) local out; out="$BACKUP_ROOT/x-ui-$(ts).dump"; run mkdir -p "$BACKUP_ROOT"; run "$XUI_BIN" migrate-db -dump "$out" && ok "Дамп: $out" ;;
+    esac
+}
+
+cmd_cloud_sync() {
+    need_root
+    hdr "Синхронизация бэкапов: Яндекс Диск / S3"
+    local f; f=$(list_archives | head -1); [[ -n ${OPT_FILE:-} ]] && f="$OPT_FILE"
+    [[ -n $f ]] || { warn "Нет архивов"; return 0; }
+    local YA="" S3=""
+    [[ -r $TG_ENV ]] && { YA=$(sed -n 's/^YADISK_TOKEN=//p' "$TG_ENV"); S3=$(sed -n 's/^S3_TARGET=//p' "$TG_ENV"); }
+    echo " 1) отправить последний архив ($(basename "$f"))  2) настроить Яндекс Диск  3) настроить S3 (rclone/aws)  0) назад"
+    local ch="${OPT_MODE:-}"; [[ -n $ch ]] || { ask "Выбор" "0"; ch="$REPLY"; }
+    case "$ch" in
+        2) ask_secret "OAuth-токен Яндекс Диска (oauth.yandex.ru, доступ к WebDAV)" || return 1
+           env_set YADISK_TOKEN "$REPLY"; ok "Сохранено в $TG_ENV" ;;
+        3) ask "Цель: rclone-remote:путь (например s3:bucket/lucx) или s3://bucket/путь для aws-cli" ""; env_set S3_TARGET "$REPLY"; ok "Сохранено" ;;
+        1|send)
+           if [[ -n $YA ]]; then
+               run curl -fsS -X MKCOL -H "Authorization: OAuth $YA" https://webdav.yandex.ru/lucx-backups/ -o /dev/null || true
+               run curl -fsS -T "$f" -H "Authorization: OAuth $YA" "https://webdav.yandex.ru/lucx-backups/$(basename "$f")" && ok "Яндекс Диск: /lucx-backups/$(basename "$f")"
+           fi
+           if [[ -n $S3 ]]; then
+               if [[ $S3 == s3://* ]] && have aws; then run aws s3 cp "$f" "${S3%/}/" && ok "S3: $S3"
+               elif have rclone; then run rclone copy "$f" "$S3" && ok "rclone: $S3"
+               else warn "Нет rclone/aws-cli"; fi
+           fi
+           [[ -z $YA && -z $S3 ]] && warn "Ничего не настроено (пункты 2/3)" ;;
+    esac
+}
+env_set() {   # ключ значение -> lucx-backup.env (600), значение не печатается
+    [[ $LUCX_DRY_RUN == 1 ]] && { echo "[dry-run] записать $1 в $TG_ENV"; return 0; }
+    [[ -f $TG_ENV ]] || install -m 600 /dev/null "$TG_ENV"
+    chmod 600 "$TG_ENV"
+    local tmp; tmp=$(mktemp); grep -v "^$1=" "$TG_ENV" >"$tmp"; printf '%s=%s\n' "$1" "$2" >>"$tmp"; install -m 600 "$tmp" "$TG_ENV"; rm -f "$tmp"
+}
+
+cmd_toggle_dry() { if [[ $LUCX_DRY_RUN == 1 ]]; then LUCX_DRY_RUN=0; ok "Dry-run выключен"; else LUCX_DRY_RUN=1; ok "Dry-run включён: меняющие команды только печатаются"; fi; }
+cmd_toggle_lang() { if [[ $LUCX_LANG == en ]]; then LUCX_LANG=ru; else LUCX_LANG=en; fi; ok "Language/язык: $LUCX_LANG"; }
 
 # ---------- Скрипт ----------
 install_cmd() {
@@ -1086,76 +1298,113 @@ cmd_help() {
     echo
     local it n=0
     for it in "${MENU_ITEMS[@]}"; do
-        IFS='|' read -r sec key _ title desc <<<"$it"
+        IFS='|' read -r sec key _ title desc _ te de <<<"$it"
+        [[ $LUCX_LANG == en ]] && { title="$te"; desc="$de"; }
         n=$((n+1)); printf '  %-17s %2d. %s — %s\n' "$key" "$n" "$title" "$desc"
     done
     cat <<'H'
   help                  эта справка
 Опции: --yes (подтверждать всё), --no-push (gh-sync), --dry-run (печатать меняющие команды),
        --rotate N, --telegram (бэкапы), --file PATH (restore/import/export), --show (ufw/bbr/swap/qwdtt-clients без изменений),
-       -n N, --mode errors|follow|sidecars (logs), --what panel|xray|sidecars (restart), --arg X (sub-check: subId/email)
+       -n N, --mode errors|follow|sidecars (logs), --what panel|xray|sidecars (restart), --arg X (sub-check/hwid-reset),
+       --inbound ID, --mask GLOB (clients-bulk), --days N (traffic-report), --lang ru|en, --all
+Журнал действий: /var/log/lucx.log
 H
 }
 
 # ================= ТАБЛИЦА МЕНЮ =================
 # раздел|команда|функция|название|пояснение   (номера — по порядку, сквозные)
+# раздел|команда|функция|название|пояснение|роль(all/master/node)|title EN|description EN
 MENU_ITEMS=(
-    "Начало|prepare|cmd_prepare|С чего начать / подготовка сервера|домен→IP, время, порты, RAM, GitHub; чек-лист ✓/✗"
-    "Установка|install|cmd_install|Установить|сборка и установка форка (install-fork.sh)"
-    "Установка|update|cmd_update|Обновить|бэкап БД и бинарника, сборка, проверка, авто-откат"
-    "Установка|uninstall|cmd_uninstall|Удалить|стоковый x-ui uninstall, перед этим полный бэкап"
-    "Установка|rollback|cmd_rollback|Откат на предыдущую версию|выбор из x-ui.bak-*, проверка, возврат при сбое"
-    "Установка|preflight|cmd_preflight|Проверка перед обновлением|диск, RAM, Go/Node, GitHub, новые версии"
-    "Установка|update-all|cmd_update_all|Обновить все серверы|по списку $HOSTS_CONF: узлы, затем мастер"
-    "Бэкапы|backup-full|cmd_backup_full|Полный бэкап|БД, /etc/x-ui, /usr/local/x-ui, сайдкары, юниты, сертификаты"
-    "Бэкапы|backup-settings|cmd_backup_settings|Бэкап настроек|БД, /etc/x-ui, passwords.json, конфиги сайдкаров"
-    "Бэкапы|restore|cmd_restore|Восстановить из бэкапа|выбор архива, бэкап текущего, рестарт, проверка"
-    "Бэкапы|backup-cron|cmd_backup_cron|Бэкап по расписанию|cron, ротация, отправка в Telegram"
-    "Бэкапы|migrate|cmd_migrate|Миграция на новый сервер|бэкап → scp → установка → восстановление"
-    "Обслуживание|status|cmd_status|Статус|версия, сервис, порты, SSL, узлы, сайдкары, RAM/диск"
-    "Обслуживание|logs|cmd_logs|Логи|x-ui и сайдкары, фильтр ошибок, follow"
-    "Обслуживание|restart|cmd_restart|Перезапуск|панель / Xray / сайдкары"
-    "Обслуживание|reset-access|cmd_reset_access|Сброс доступа|логин, пароль, путь, порт, 2FA"
-    "Обслуживание|ssl|cmd_ssl|SSL|выпуск (стоковое меню x-ui/acme.sh) и продление"
-    "Обслуживание|geo|cmd_geo|Обновить геобазы|geoip/geosite без пересборки панели"
-    "Обслуживание|xray-core|cmd_xray_core|Обновить ядро Xray|выбор версии, через API панели"
-    "Обслуживание|cleanup|cmd_cleanup|Очистка|старые x-ui.bak, бэкапы, кэш Go/npm"
-    "Обслуживание|monitor|cmd_monitor|Мониторинг в Telegram|x-ui и узлы, уведомление о сбое/восстановлении"
-    "Сеть и безопасность|ufw|cmd_ufw|Firewall (UFW)|показать/открыть/закрыть порты панели и инбаундов"
-    "Сеть и безопасность|bbr|cmd_bbr|BBR и тюнинг сети|BBR, fq, лимиты, sysctl (с откатом)"
-    "Сеть и безопасность|swap|cmd_swap|Swap|показать, создать или увеличить swapfile"
-    "Сеть и безопасность|fail2ban|cmd_fail2ban|Fail2ban|защита SSH и входа в панель"
-    "Сеть и безопасность|ssh-harden|cmd_ssh_harden|Порт SSH и вход по ключу|с проверками, старый порт до подтверждения"
-    "Сеть и безопасность|latency|cmd_latency|Задержка до узлов и порты|ping/tcp к узлам, слушают ли инбаунды"
-    "Клиенты|qwdtt-clients|cmd_qwdtt_clients|Клиенты qWDTT|список устройств, удаление тестовых записей"
-    "Клиенты|sub-check|cmd_sub_check|Проверка подписки|по subId/email: узлы, срок, трафик"
-    "Клиенты|inbounds-export|cmd_inbounds_export|Экспорт инбаундов|в JSON-файл"
-    "Клиенты|inbounds-import|cmd_inbounds_import|Импорт инбаундов|из JSON через API, с бэкапом"
-    "GitHub|gh-sync|cmd_gh_sync|Обновить код на GitHub|слить upstream AlexeyLCP/lucx-ui в форк, конфликты, push"
-    "Скрипт|self-update|cmd_self_update|Самообновление / команда lucx|скачать свежий lucx.sh в /usr/local/bin/lucx"
+    "Начало|prepare|cmd_prepare|С чего начать / подготовка сервера|домен→IP, время, порты, RAM, GitHub; чек-лист ✓/✗|all|Getting started / server prep|domain→IP, time, ports, RAM, GitHub; ✓/✗ checklist"
+    "Начало|role|cmd_role|Роль сервера|мастер / узел / одиночный (по БД)|all|Server role|master / node / single (from DB)"
+    "Установка|install|cmd_install|Установить|сборка и установка форка (install-fork.sh)|all|Install|build and install the fork (install-fork.sh)"
+    "Установка|update|cmd_update|Обновить|бэкап БД и бинарника, сборка, проверка, авто-откат|all|Update|DB+binary backup, build, verify, auto-rollback"
+    "Установка|uninstall|cmd_uninstall|Удалить|стоковый x-ui uninstall, перед этим полный бэкап|all|Uninstall|stock x-ui uninstall after a full backup"
+    "Установка|rollback|cmd_rollback|Откат на предыдущую версию|выбор из x-ui.bak-*, проверка, возврат при сбое|all|Roll back version|pick x-ui.bak-*, verify, revert on failure"
+    "Установка|preflight|cmd_preflight|Проверка перед обновлением|диск, RAM, Go/Node, GitHub, новые версии|all|Pre-update check|disk, RAM, Go/Node, GitHub, new versions"
+    "Установка|update-all|cmd_update_all|Обновить все серверы|по списку lucx-hosts.conf: узлы, затем мастер|master|Update all servers|from lucx-hosts.conf: nodes, then master"
+    "Бэкапы|backup-full|cmd_backup_full|Полный бэкап|БД, /etc/x-ui, /usr/local/x-ui, сайдкары, юниты, сертификаты|all|Full backup|DB, /etc/x-ui, /usr/local/x-ui, sidecars, units, certs"
+    "Бэкапы|backup-settings|cmd_backup_settings|Бэкап настроек|БД, /etc/x-ui, passwords.json, конфиги сайдкаров|all|Settings backup|DB, /etc/x-ui, passwords.json, sidecar configs"
+    "Бэкапы|restore|cmd_restore|Восстановить из бэкапа|выбор архива, бэкап текущего, рестарт, проверка|all|Restore backup|pick archive, backup current, restart, verify"
+    "Бэкапы|backup-cron|cmd_backup_cron|Бэкап по расписанию|cron, ротация, отправка в Telegram|all|Scheduled backups|cron, rotation, Telegram upload"
+    "Бэкапы|cloud-sync|cmd_cloud_sync|Бэкапы в облако|Яндекс Диск (WebDAV) / S3 (rclone, aws-cli)|all|Cloud backup sync|Yandex Disk (WebDAV) / S3 (rclone, aws-cli)"
+    "Бэкапы|migrate|cmd_migrate|Миграция на новый сервер|бэкап → scp → установка → восстановление|all|Migrate to new server|backup → scp → install → restore"
+    "Бэкапы|db-migrate|cmd_db_migrate|SQLite ↔ PostgreSQL|штатный x-ui migrate-db (обратно — из бэкапа)|all|SQLite ↔ PostgreSQL|stock x-ui migrate-db (back: from backup)"
+    "Обслуживание|status|cmd_status|Статус|версия, сервис, порты, SSL, узлы, сайдкары, RAM/диск|all|Status|version, service, ports, SSL, nodes, sidecars, RAM/disk"
+    "Обслуживание|logs|cmd_logs|Логи|x-ui и сайдкары, фильтр ошибок, follow|all|Logs|x-ui and sidecars, error filter, follow"
+    "Обслуживание|restart|cmd_restart|Перезапуск|панель / Xray / сайдкары|all|Restart|panel / Xray / sidecars"
+    "Обслуживание|reset-access|cmd_reset_access|Сброс доступа|логин, пароль, путь, порт, 2FA|all|Reset access|username, password, path, port, 2FA"
+    "Обслуживание|ssl|cmd_ssl|SSL|выпуск (стоковое меню x-ui/acme.sh) и продление|all|SSL|issue (stock x-ui menu/acme.sh) and renew"
+    "Обслуживание|geo|cmd_geo|Обновить геобазы|geoip/geosite без пересборки панели|all|Update geo files|geoip/geosite without rebuilding"
+    "Обслуживание|xray-core|cmd_xray_core|Обновить ядро Xray|выбор версии, через API панели|all|Update Xray core|pick version, via panel API"
+    "Обслуживание|cleanup|cmd_cleanup|Очистка|старые x-ui.bak, бэкапы, кэш Go/npm|all|Cleanup|old x-ui.bak, backups, Go/npm cache"
+    "Обслуживание|monitor|cmd_monitor|Мониторинг в Telegram|x-ui и узлы, уведомление о сбое/восстановлении|all|Telegram monitoring|x-ui and nodes, alert on failure/recovery"
+    "Сеть и безопасность|ufw|cmd_ufw|Firewall (UFW)|показать/открыть/закрыть порты панели и инбаундов|all|Firewall (UFW)|show/open/close panel and inbound ports"
+    "Сеть и безопасность|bbr|cmd_bbr|BBR и тюнинг сети|BBR, fq, лимиты, sysctl (с откатом)|all|BBR & network tuning|BBR, fq, limits, sysctl (revertable)"
+    "Сеть и безопасность|swap|cmd_swap|Swap|показать, создать или увеличить swapfile|all|Swap|show, create or grow swapfile"
+    "Сеть и безопасность|fail2ban|cmd_fail2ban|Fail2ban|защита SSH и входа в панель|all|Fail2ban|protect SSH and panel login"
+    "Сеть и безопасность|ssh-harden|cmd_ssh_harden|Порт SSH и вход по ключу|с проверками, старый порт до подтверждения|all|SSH port & key-only login|with checks, old port kept until confirmed"
+    "Сеть и безопасность|latency|cmd_latency|Задержка до узлов и порты|ping/tcp к узлам, слушают ли инбаунды|all|Node latency & ports|ping/tcp to nodes, listening inbounds"
+    "Сеть и безопасность|reality-check|cmd_reality_check|Проверка Reality-маскировки|донор доступен, TLS 1.3, h2|all|Reality camouflage check|donor reachable, TLS 1.3, h2"
+    "Сеть и безопасность|reality-rotate|cmd_reality_rotate|Ротация ключей Reality|новые ключи и shortId (клиентам обновить подписку)|all|Rotate Reality keys|new keys and shortId (clients must refresh)"
+    "Клиенты|qwdtt-clients|cmd_qwdtt_clients|Клиенты qWDTT|список устройств, удаление тестовых записей|all|qWDTT clients|devices list, remove test entries"
+    "Клиенты|sub-check|cmd_sub_check|Проверка подписки|по subId/email: узлы, срок, трафик|all|Subscription check|by subId/email: nodes, expiry, traffic"
+    "Клиенты|traffic-report|cmd_traffic_report|Отчёт по трафику|топ клиентов, скоро истекают, ≥90% лимита|all|Traffic report|top clients, expiring soon, ≥90% quota"
+    "Клиенты|clients-bulk|cmd_clients_bulk|Массовые действия с клиентами|продлить, сбросить трафик, вкл/выкл (по инбаунду/маске)|all|Bulk client actions|extend, reset traffic, enable/disable"
+    "Клиенты|hwid-reset|cmd_hwid_reset|Сброс HWID клиента|удалить привязанные устройства (client_hwids)|all|Reset client HWID|remove bound devices (client_hwids)"
+    "Клиенты|inbounds-export|cmd_inbounds_export|Экспорт инбаундов|в JSON-файл|all|Export inbounds|to JSON file"
+    "Клиенты|inbounds-import|cmd_inbounds_import|Импорт инбаундов|из JSON через API, с бэкапом|all|Import inbounds|from JSON via API, with backup"
+    "Узлы|node-link|cmd_node_link|Подключение узла к мастеру|проверка связи и что ввести в панели мастера|all|Link node to master|connectivity check and what to enter on master"
+    "GitHub|gh-sync|cmd_gh_sync|Обновить код на GitHub|слить upstream AlexeyLCP/lucx-ui в форк, конфликты, push|all|Sync code on GitHub|merge upstream AlexeyLCP/lucx-ui, conflicts, push"
+    "Скрипт|self-update|cmd_self_update|Самообновление / команда lucx|скачать свежий lucx.sh в /usr/local/bin/lucx|all|Self-update / lucx command|install fresh lucx.sh as /usr/local/bin/lucx"
 )
 
+SHOW_ALL="${LUCX_SHOW_ALL:-0}"
+item_visible() { [[ $SHOW_ALL == 1 || $1 == all || $1 == "$ROLE" || ( $1 == master && $ROLE == single ) ]]; }
 show_menu() {
-    local it n=0 last=""
-    printf '\n%s LucX — панель обслуживания %s %s(ветка %s, скрипт v%s)%s\n' "$C_W$C_C" "$C_0" "$C_D" "$LUCX_BRANCH" "$LUCX_VERSION_SCRIPT" "$C_0"
-    xui_installed && printf ' %sУстановлено: %s, x-ui: %s%s\n' "$C_D" "$(xui_version)" "$(systemctl is-active x-ui 2>/dev/null)" "$C_0"
+    local it n=0 last="" sec key fn title desc role te de
+    ROLE=$(detect_role 2>/dev/null); ROLE=${ROLE:-single}
+    if [[ $LUCX_LANG == en ]]; then
+        printf '\n%s LucX maintenance menu %s %s(branch %s, script v%s, role: %s)%s\n' "$C_W$C_C" "$C_0" "$C_D" "$LUCX_BRANCH" "$LUCX_VERSION_SCRIPT" "$ROLE" "$C_0"
+    else
+        printf '\n%s LucX — панель обслуживания %s %s(ветка %s, скрипт v%s, роль: %s)%s\n' "$C_W$C_C" "$C_0" "$C_D" "$LUCX_BRANCH" "$LUCX_VERSION_SCRIPT" "$ROLE" "$C_0"
+    fi
+    xui_installed && printf ' %sx-ui: %s, %s%s\n' "$C_D" "$(xui_version)" "$(systemctl is-active x-ui 2>/dev/null)" "$C_0"
+    [[ $LUCX_DRY_RUN == 1 ]] && printf ' %s[DRY-RUN] ничего не меняется / nothing is changed%s\n' "$C_Y" "$C_0"
     for it in "${MENU_ITEMS[@]}"; do
-        IFS='|' read -r sec _ _ title desc <<<"$it"
+        IFS='|' read -r sec key fn title desc role te de <<<"$it"
         n=$((n+1))
+        item_visible "$role" || continue
+        [[ $LUCX_LANG == en ]] && { title="$te"; desc="$de"; sec="$(sec_en "$sec")"; }
         [[ $sec != "$last" ]] && { printf '\n %s%s%s\n' "$C_Y" "$sec" "$C_0"; last="$sec"; }
         printf '  %s%2d%s. %-36s %s%s%s\n' "$C_G" "$n" "$C_0" "$title" "$C_D" "$desc" "$C_0"
     done
-    printf '\n  %s 0%s. Выход\n' "$C_R" "$C_0"
+    if [[ $LUCX_LANG == en ]]; then
+        printf '\n  90. show all items   91. dry-run on/off   92. язык RU/EN\n  %s 0%s. Exit\n' "$C_R" "$C_0"
+    else
+        printf '\n  90. показать все пункты   91. dry-run вкл/выкл   92. language RU/EN\n  %s 0%s. Выход\n' "$C_R" "$C_0"
+    fi
+}
+sec_en() { case "$1" in Начало) echo Start ;; Установка) echo Install ;; Бэкапы) echo Backups ;; Обслуживание) echo Maintenance ;; "Сеть и безопасность") echo "Network & security" ;; Клиенты) echo Clients ;; Узлы) echo Nodes ;; Скрипт) echo Script ;; *) echo "$1" ;; esac; }
+
+# Журнал действий: что, когда, кто, результат. Аргументы с секретами не пишутся.
+log_action() {
+    local who="${SUDO_USER:-$(who am i 2>/dev/null | awk '{print $1}')}"
+    { printf '%s user=%s(%s) cmd=%s dry=%s rc=%s\n' "$(date '+%F %T%z')" "${who:-?}" "$(id -un)" "$1" "$LUCX_DRY_RUN" "$2" >>/var/log/lucx.log; } 2>/dev/null || true
 }
 
 dispatch() {   # по номеру или команде
     local want="$1" it n=0
     for it in "${MENU_ITEMS[@]}"; do
         IFS='|' read -r _ key fn _ <<<"$it"; n=$((n+1))
-        if [[ $want == "$key" || $want == "$n" ]]; then "$fn"; return $?; fi
+        if [[ $want == "$key" || $want == "$n" ]]; then "$fn"; local rc=$?; log_action "$key" "$rc"; return $rc; fi
     done
     case "$want" in
         monitor-check) cmd_monitor_check ;;
+        90|show-all) [[ $SHOW_ALL == 1 ]] && SHOW_ALL=0 || SHOW_ALL=1 ;;
+        91|dry-run) cmd_toggle_dry ;;
+        92|lang) cmd_toggle_lang ;;
         help|-h|--help) cmd_help ;;
         *) err "Неизвестная команда: $want (см. help)"; return 2 ;;
     esac
@@ -1176,6 +1425,11 @@ main() {
             --mode) OPT_MODE="$2"; shift ;;
             --what) OPT_WHAT="$2"; shift ;;
             --arg) OPT_ARG="$2"; shift ;;
+            --inbound) OPT_INBOUND="$2"; shift ;;
+            --mask) OPT_MASK="$2"; shift ;;
+            --days) OPT_DAYS="$2"; shift ;;
+            --lang) LUCX_LANG="$2"; shift ;;
+            --all) SHOW_ALL=1 ;;
             *) [[ -z $cmd ]] && cmd="$1" || OPT_ARG="$1" ;;
         esac
         shift
@@ -1187,8 +1441,9 @@ main() {
     while :; do
         show_menu
         ask $'\nВыберите пункт' ""
-        [[ $REPLY == 0 || $REPLY == q ]] && { echo "Выход."; exit 0; }
+        [[ $REPLY == 0 ]] && { echo "Выход."; exit 0; }
         [[ -z $REPLY ]] && continue
+        case "$REPLY" in 90|91|92) dispatch "$REPLY"; continue ;; esac
         ( dispatch "$REPLY" ) || warn "Пункт завершился с ошибкой."
         pause
     done

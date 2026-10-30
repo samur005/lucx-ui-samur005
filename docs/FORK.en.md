@@ -39,51 +39,56 @@ Until [PR #1](https://github.com/samur005/lucx-ui-samur005/pull/1) merges: use `
 
 ## Maintenance menu `lucx.sh`
 
-One command (root), works via curl (no neighbour files needed; `install-fork.sh` is fetched from the same branch; answers are read from `/dev/tty`):
-
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/samur005/lucx-ui-samur005/feat/native-vk-hash-generator/scripts/lucx.sh)
 ```
 
-Non-interactive: `bash <(curl -fsSL https://raw.githubusercontent.com/samur005/lucx-ui-samur005/feat/native-vk-hash-generator/scripts/lucx.sh) <command> [options]` (`help` lists all). Item 33 installs the `lucx` command into `/usr/local/bin`.
+A plain text menu: numbered items, pick by typing the number and Enter (input from `/dev/tty`, works via `curl | bash`). Submenus are numbered too, `0` = back/exit. Service items: `90` show all items (not only for the detected role), `91` toggle dry-run, `92` language RU/EN. Dangerous actions ask for confirmation and back up first. Non-interactive: `lucx <command> [--yes] [--dry-run] …`, help: `lucx help`. Log: `/var/log/lucx.log`, cloud creds: `/etc/x-ui/lucx-backup.env` (600).
 
-| # | Command | Description (menu is in Russian) |
-|---|---------|------|
-| 1 | `prepare` | Server preparation checklist: domain→IP (A/AAAA, Cloudflare proxy warning), OS/arch, NTP, ports 80/443/panel, RAM/swap, disk, GitHub reachability, UFW; ✓/✗ summary and recommended order |
-| 2 | `install` | Install the fork via scripts/install-fork.sh (offers a backup if x-ui exists) |
-| 3 | `update` | Update: resource check, DB (sqlite/pg_dump) + binary backup, install-fork.sh with LUCX_ALLOW_REBOOT=0 LUCX_UFW_OPEN=0, GOFLAGS by RAM, nice; post-check; binary rollback on failure |
-| 4 | `uninstall` | Uninstall: type `yes`, offer full backup, stock `x-ui uninstall` |
-| 5 | `rollback` | Roll back to a previous x-ui.bak-* binary (shows `-v`), verify, revert on failure |
-| 6 | `preflight` | Pre-update check: disk, RAM, Go/Node, GitHub, installed vs fork vs upstream version |
-| 7 | `update-all` | Update all servers from /etc/x-ui/lucx-hosts.conf (nodes first, then master; stop on first error) |
-| 8 | `backup-full` | Full backup (tar.gz + sha256 in /root/lucx-backups/<date>/) |
-| 9 | `backup-settings` | Settings backup (DB, /etc/x-ui, qWDTT passwords.json, sidecar configs) |
-| 10 | `restore` | Restore from an archive (auto-backup of current state, stop/start, verify) |
-| 11 | `backup-cron` | Scheduled backups (cron daily/weekly, rotation, optional Telegram) |
-| 12 | `migrate` | Migrate to a new server (full backup → scp → install → restore → status) |
-| 13 | `status` | Status: version, service, ports, SSL expiry, nodes (from DB), sidecars, RAM/disk |
-| 14 | `logs` | Logs: last N lines, panic/fatal/error filter, follow, sidecars |
-| 15 | `restart` | Restart panel / Xray / sidecar units (warns: x-ui restart drops qWDTT clients ~70 s) |
-| 16 | `reset-access` | Reset access: username/password, webBasePath, port, 2FA (stock `x-ui setting`) |
-| 17 | `ssl` | SSL: stock x-ui menu (acme.sh) for issuing, `acme.sh --cron` renewal; Caddy untouched |
-| 18 | `geo` | Update geoip/geosite (stock `x-ui update-all-geofiles`) |
-| 19 | `xray-core` | Update the Xray core to a chosen version via panel API installXray |
-| 20 | `cleanup` | Cleanup old x-ui.bak-*, old backups, Go/npm caches, build dirs (shows size, asks) |
-| 21 | `monitor` | Telegram monitoring (cron every N min, x-ui + nodes, alerts on failure and recovery) |
-| 22 | `ufw` | UFW: show/open/close panel, subscription and inbound ports (SSH port guarded) |
-| 23 | `bbr` | BBR + fq + limits in /etc/sysctl.d/99-lucx.conf (revertable) |
-| 24 | `swap` | Show/create/grow /swapfile |
-| 25 | `fail2ban` | Fail2ban: sshd + panel login jail (journal 'failed login … IP=') |
-| 26 | `ssh-harden` | SSH port change + key-only login (authorized_keys, UFW, sshd -t, old port kept until confirmed) |
-| 27 | `latency` | Ping/TCP to nodes, which inbound ports listen, optional speedtest |
-| 28 | `qwdtt-clients` | qWDTT clients from passwords.json (no passwords shown); remove zz_test*/lucx-deploy-probe* with backup + SIGHUP |
-| 29 | `sub-check` | Subscription check by subId/email with UA qWDTT-Subscription/1.0 and v2rayN |
-| 30 | `inbounds-export` | Export inbounds to JSON |
-| 31 | `inbounds-import` | Import inbounds from JSON via API (backup first, port/tag conflict warning) |
-| 32 | `gh-sync` | Sync fork with AlexeyLCP/lucx-ui main: merge --no-ff, lock files → upstream, others ours/theirs/editor/abort, marker check, optional go build/vet, plain git push (`--no-push`) |
-| 33 | `self-update` | Self-update: install fresh lucx.sh as /usr/local/bin/lucx |
-
-All changing actions ask for confirmation (dangerous ones require typing `yes`); `--yes`, `--dry-run`, `--show` options. Extend by adding `cmd_<name>` and a `MENU_ITEMS` row.
+| # | Command | What it does |
+|---|---|---|
+| 1 | `prepare` | Getting started / server prep — domain→IP, time, ports, RAM, GitHub; ✓/✗ checklist |
+| 2 | `role` | Server role — master / node / single (from DB) |
+| 3 | `install` | Install — build and install the fork (install-fork.sh) |
+| 4 | `update` | Update — DB+binary backup, build, verify, auto-rollback |
+| 5 | `uninstall` | Uninstall — stock x-ui uninstall after a full backup |
+| 6 | `rollback` | Roll back version — pick x-ui.bak-*, verify, revert on failure |
+| 7 | `preflight` | Pre-update check — disk, RAM, Go/Node, GitHub, new versions |
+| 8 | `update-all` | Update all servers — from lucx-hosts.conf: nodes, then master |
+| 9 | `backup-full` | Full backup — DB, /etc/x-ui, /usr/local/x-ui, sidecars, units, certs |
+| 10 | `backup-settings` | Settings backup — DB, /etc/x-ui, passwords.json, sidecar configs |
+| 11 | `restore` | Restore backup — pick archive, backup current, restart, verify |
+| 12 | `backup-cron` | Scheduled backups — cron, rotation, Telegram upload |
+| 13 | `cloud-sync` | Cloud backup sync — Yandex Disk (WebDAV) / S3 (rclone, aws-cli) |
+| 14 | `migrate` | Migrate to new server — backup → scp → install → restore |
+| 15 | `db-migrate` | SQLite ↔ PostgreSQL — stock x-ui migrate-db (back: from backup) |
+| 16 | `status` | Status — version, service, ports, SSL, nodes, sidecars, RAM/disk |
+| 17 | `logs` | Logs — x-ui and sidecars, error filter, follow |
+| 18 | `restart` | Restart — panel / Xray / sidecars |
+| 19 | `reset-access` | Reset access — username, password, path, port, 2FA |
+| 20 | `ssl` | SSL — issue (stock x-ui menu/acme.sh) and renew |
+| 21 | `geo` | Update geo files — geoip/geosite without rebuilding |
+| 22 | `xray-core` | Update Xray core — pick version, via panel API |
+| 23 | `cleanup` | Cleanup — old x-ui.bak, backups, Go/npm cache |
+| 24 | `monitor` | Telegram monitoring — x-ui and nodes, alert on failure/recovery |
+| 25 | `ufw` | Firewall (UFW) — show/open/close panel and inbound ports |
+| 26 | `bbr` | BBR & network tuning — BBR, fq, limits, sysctl (revertable) |
+| 27 | `swap` | Swap — show, create or grow swapfile |
+| 28 | `fail2ban` | Fail2ban — protect SSH and panel login |
+| 29 | `ssh-harden` | SSH port & key-only login — with checks, old port kept until confirmed |
+| 30 | `latency` | Node latency & ports — ping/tcp to nodes, listening inbounds |
+| 31 | `reality-check` | Reality camouflage check — donor reachable, TLS 1.3, h2 |
+| 32 | `reality-rotate` | Rotate Reality keys — new keys and shortId (clients must refresh) |
+| 33 | `qwdtt-clients` | qWDTT clients — devices list, remove test entries |
+| 34 | `sub-check` | Subscription check — by subId/email: nodes, expiry, traffic |
+| 35 | `traffic-report` | Traffic report — top clients, expiring soon, ≥90% quota |
+| 36 | `clients-bulk` | Bulk client actions — extend, reset traffic, enable/disable |
+| 37 | `hwid-reset` | Reset client HWID — remove bound devices (client_hwids) |
+| 38 | `inbounds-export` | Export inbounds — to JSON file |
+| 39 | `inbounds-import` | Import inbounds — from JSON via API, with backup |
+| 40 | `node-link` | Link node to master — connectivity check and what to enter on master |
+| 41 | `gh-sync` | Sync code on GitHub — merge upstream AlexeyLCP/lucx-ui, conflicts, push |
+| 42 | `self-update` | Self-update / lucx command — install fresh lucx.sh as /usr/local/bin/lucx |
 
 ## Clean VPS install (from the GitHub fork)
 
