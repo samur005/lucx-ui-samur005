@@ -21,4 +21,24 @@
     <string name="ssl_error">Ошибка сертификата SSL. Включите доверие самоподписанным сертификатам в настройках сервера.</string>
     <string name="no_app">Нет приложения для открытия ссылки</string>
     <string name="delete_confirm">Удалить сервер?</string>
+    <string name="settings">Настройки</string>
+    <string name="list_style">Стиль списка серверов</string>
+    <string name="style_cards">Карточки</string>
+    <string name="style_grid">Плитки (дашборд)</string>
+    <string name="style_minimal">Минимализм</string>
+    <string name="theme">Тема</string>
+    <string name="theme_system">Как в системе</string>
+    <string name="theme_dark">Тёмная</string>
+    <string name="theme_light">Светлая</string>
+    <string name="online">онлайн</string>
+    <string name="offline">офлайн</string>
+    <string name="checking">проверка…</string>
+    <string name="add_tile">+ Добавить</string>
+    <string name="last_opened">вход: %1$s</string>
+    <string name="never">никогда</string>
+    <string name="flag">Флаг</string>
+    <string name="deleted">Сервер «%1$s» удалён</string>
+    <string name="undo">Отменить</string>
+    <string name="servers_count">Серверов: %1$d</string>
+    <string name="dashboard_subtitle">Панели управления серверами</string>
 </resources>

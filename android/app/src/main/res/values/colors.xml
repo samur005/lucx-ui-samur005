@@ -1,0 +1,10 @@
+<resources>
+    <color name="accent">#2F80ED</color>
+    <color name="purple">#7B2FF7</color>
+    <color name="navy">#0B1426</color>
+    <color name="navy_card">#16213A</color>
+    <color name="online">#2ECC71</color>
+    <color name="offline">#E74C3C</color>
+    <color name="unknown">#8A93A6</color>
+    <color name="grey_text">#8A93A6</color>
+</resources>

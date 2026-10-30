@@ -47,7 +47,7 @@ jobs:
           else
             echo "::warning::No signing secrets; generating throwaway keystore (each build has a different signature)"
             keytool -genkeypair -v -keystore "$RUNNER_TEMP/release.jks" -storepass android -keypass android \
-              -alias lucx -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=LucX Panel,O=antibs,C=RU"
+              -storetype PKCS12 -alias lucx -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=LucX Panel,O=antibs,C=RU"
           fi
           echo "KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
       - name: Build release APK

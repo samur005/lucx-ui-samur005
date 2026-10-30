@@ -1,7 +1,10 @@
 <resources>
-    <style name="AppTheme" parent="android:Theme.Material.Light.DarkActionBar">
-        <item name="android:colorPrimary">#1F6FEB</item>
-        <item name="android:colorPrimaryDark">#1557B0</item>
-        <item name="android:colorAccent">#1F6FEB</item>
+    <style name="AppTheme" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/accent</item>
+        <item name="colorSecondary">@color/accent</item>
     </style>
+    <style name="AppTheme.Bar" parent="Theme.Material3.DayNight">
+        <item name="colorPrimary">@color/accent</item>
+    </style>
+    <style name="Fab.Round" parent=""><item name="cornerSize">50%</item></style>
 </resources>

@@ -503,4 +503,4 @@ curl -fsSL https://raw.githubusercontent.com/samur005/lucx-ui-samur005/feat/nati
 APK собирается в GitHub Actions (`.github/workflows/android-apk.yml`) и публикуется в пре-релиз `apk-latest`:
 **[lucx-panel.apk](https://github.com/samur005/lucx-ui-samur005/releases/download/apk-latest/lucx-panel.apk)**
 
-Без секретов `ANDROID_KEYSTORE_*` APK подписывается временным ключом — при обновлении может понадобиться удалить старую версию.
+С версии 1.1 APK подписывается постоянным ключом (секреты `ANDROID_KEYSTORE_*`), обновления ставятся поверх. Сборку 1.0 нужно один раз удалить вручную. В 1.1: три стиля списка серверов (карточки / плитки / минимализм), флаги, статус и пинг, время последнего входа, настройки темы.

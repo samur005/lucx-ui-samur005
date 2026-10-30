@@ -303,4 +303,4 @@ Full tables and notes: [FORK.md](FORK.md).
 The APK is built by GitHub Actions (`.github/workflows/android-apk.yml`) and published to the `apk-latest` prerelease:
 **[lucx-panel.apk](https://github.com/samur005/lucx-ui-samur005/releases/download/apk-latest/lucx-panel.apk)**
 
-Without `ANDROID_KEYSTORE_*` secrets the APK is signed with a throwaway key, so updating may require uninstalling the previous version.
+Since 1.1 the APK is signed with a fixed key (`ANDROID_KEYSTORE_*` secrets), so updates install over the old app. The 1.0 build must be uninstalled once. 1.1 adds three server list styles (cards / grid / minimal), flags, status and ping, last-opened time, and a theme setting.

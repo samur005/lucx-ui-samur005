@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingHorizontal="20dp"
+    android:paddingVertical="18dp" android:gravity="center_vertical" android:orientation="horizontal"
+    android:background="?android:attr/colorBackground">
+    <ImageView android:layout_width="28dp" android:layout_height="28dp" android:src="@drawable/ic_server" android:importantForAccessibility="no"
+        android:tint="@color/accent"/>
+    <TextView android:id="@+id/flag" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textSize="24sp" android:layout_marginStart="14dp"/>
+    <LinearLayout android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+        android:orientation="vertical" android:layout_marginStart="14dp">
+        <TextView android:id="@+id/name" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:textSize="17sp" android:maxLines="1" android:ellipsize="end"/>
+        <TextView android:id="@+id/last" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:textSize="12sp" android:textColor="@color/grey_text"/>
+    </LinearLayout>
+    <View android:id="@+id/dot" android:layout_width="10dp" android:layout_height="10dp" android:background="@drawable/dot"/>
+    <TextView android:id="@+id/ping" android:layout_width="56dp" android:layout_height="wrap_content" android:gravity="end"
+        android:textSize="12sp" android:textColor="@color/accent"/>
+</LinearLayout>

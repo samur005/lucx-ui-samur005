@@ -20,10 +20,11 @@ import android.view.View
 import android.webkit.*
 import android.widget.ProgressBar
 import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import java.io.File
 
-class MainActivity : Activity() {
+class MainActivity : AppCompatActivity() {
     private lateinit var web: WebView
     private lateinit var swipe: SwipeRefreshLayout
     private lateinit var progress: ProgressBar
@@ -33,6 +34,7 @@ class MainActivity : Activity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Servers.currentId(this)?.let { if (savedInstanceState == null) Servers.markOpened(this, it) }
         server = Servers.current(this)
         if (server == null) {
             startActivity(Intent(this, ServersActivity::class.java)); finish(); return
@@ -240,6 +242,7 @@ class MainActivity : Activity() {
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menu.add(0, 1, 0, R.string.reload)
         menu.add(0, 2, 0, R.string.switch_server)
+        menu.add(0, 3, 0, R.string.settings)
         return true
     }
 
@@ -247,6 +250,7 @@ class MainActivity : Activity() {
         when (item.itemId) {
             1 -> web.reload()
             2 -> startActivity(Intent(this, ServersActivity::class.java))
+            3 -> startActivity(Intent(this, SettingsActivity::class.java))
             else -> return super.onOptionsItemSelected(item)
         }
         return true
@@ -255,9 +259,12 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         val cur = Servers.current(this)
-        if (::web.isInitialized && cur != null && cur != server) {
+        if (::web.isInitialized && cur != null && (cur.id != server?.id || cur.url != server?.url)) {
             server = cur; title = cur.name
+            Servers.markOpened(this, cur.id)
             web.clearHistory(); web.loadUrl(cur.url)
+        } else if (cur != null) {
+            server = cur
         }
     }
 

@@ -20,4 +20,24 @@
     <string name="ssl_error">SSL certificate error. Enable trusting self-signed certificates in the server settings.</string>
     <string name="no_app">No app to open this link</string>
     <string name="delete_confirm">Delete server?</string>
+    <string name="settings">Settings</string>
+    <string name="list_style">Server list style</string>
+    <string name="style_cards">Cards</string>
+    <string name="style_grid">Grid dashboard</string>
+    <string name="style_minimal">Minimal</string>
+    <string name="theme">Theme</string>
+    <string name="theme_system">System default</string>
+    <string name="theme_dark">Dark</string>
+    <string name="theme_light">Light</string>
+    <string name="online">online</string>
+    <string name="offline">offline</string>
+    <string name="checking">checking…</string>
+    <string name="add_tile">+ Add</string>
+    <string name="last_opened">opened: %1$s</string>
+    <string name="never">never</string>
+    <string name="flag">Flag</string>
+    <string name="deleted">Server “%1$s” deleted</string>
+    <string name="undo">Undo</string>
+    <string name="servers_count">Servers: %1$d</string>
+    <string name="dashboard_subtitle">Server control panels</string>
 </resources>
