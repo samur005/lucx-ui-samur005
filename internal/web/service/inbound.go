@@ -2129,6 +2129,24 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 			}
 		}
 	}
+	// LUCX-FORK: share-only sidecars keep clients in client_inbounds; the
+	// normalize below re-marshals settings through the sidecar config struct
+	// and drops any clients key, after which SyncInbound(prune) wiped every
+	// link. Capture what a master push carried before that happens.
+	var shareOnlyPushed []model.Client
+	shareOnlyHasPushed := false
+	if shareOnlySidecar(inbound.Protocol) && s.FromNodeSync {
+		var probe map[string]json.RawMessage
+		if json.Unmarshal([]byte(inbound.Settings), &probe) == nil {
+			if raw, ok := probe["clients"]; ok && string(raw) != "null" {
+				if pushed, pErr := ParseInboundSettingsClients(inbound.Settings); pErr == nil {
+					shareOnlyPushed = pushed
+					shareOnlyHasPushed = true
+				}
+			}
+		}
+	}
+	// END LUCX-FORK
 	// LUCX-HOOK: sidecar normalize + AWG subnet/client allocation.
 	if err := s.normalizeLucxSidecarsOnUpdate(inbound, oldInbound); err != nil {
 		return inbound, false, err
@@ -2418,13 +2436,25 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 				needRestart = true
 			}
 		}
-		newClients, gcErr := s.GetClients(oldInbound)
-		if gcErr != nil {
-			return gcErr
+		// LUCX-FORK: for share-only sidecars settings never hold clients, so
+		// only a master push that carried them may re-sync the links; any other
+		// save leaves client_inbounds alone instead of pruning it to nothing.
+		if shareOnlySidecar(oldInbound.Protocol) {
+			if shareOnlyHasPushed {
+				if err := s.clientService.SyncInbound(tx, oldInbound.Id, shareOnlyPushed); err != nil {
+					return err
+				}
+			}
+		} else {
+			newClients, gcErr := s.GetClients(oldInbound)
+			if gcErr != nil {
+				return gcErr
+			}
+			if err := s.clientService.SyncInbound(tx, oldInbound.Id, newClients); err != nil {
+				return err
+			}
 		}
-		if err := s.clientService.SyncInbound(tx, oldInbound.Id, newClients); err != nil {
-			return err
-		}
+		// END LUCX-FORK
 		if oldInbound.NodeID != nil {
 			if err := (&NodeService{}).MarkNodeDirtyTx(tx, *oldInbound.NodeID); err != nil {
 				return err
@@ -2507,6 +2537,36 @@ func (s *InboundService) buildInboundForNodePush(tx *gorm.DB, inbound *model.Inb
 	if err := json.Unmarshal([]byte(inbound.Settings), &settings); err != nil {
 		return nil, err
 	}
+
+	// LUCX-FORK: share-only sidecars (qWDTT/CSQTT/olcRTC/OpenFlux/tproxy) keep
+	// their clients in client_inbounds, never in settings. The node mirrors
+	// settings.clients into its own client_inbounds with prune=true, so a push
+	// without them wiped every link on the node and its sidecar never got
+	// per-client keys. Ship the linked clients for node-hosted ones.
+	if shareOnlySidecar(inbound.Protocol) && inbound.NodeID != nil && inbound.Id > 0 {
+		linked, lErr := s.clientService.ListForInbound(tx, inbound.Id)
+		if lErr != nil {
+			return nil, lErr
+		}
+		raw, mErr := json.Marshal(linked)
+		if mErr != nil {
+			return nil, mErr
+		}
+		var generic []any
+		if uErr := json.Unmarshal(raw, &generic); uErr != nil {
+			return nil, uErr
+		}
+		if generic == nil {
+			generic = []any{}
+		}
+		settings["clients"] = generic
+		withClients, wErr := json.MarshalIndent(settings, "", "  ")
+		if wErr != nil {
+			return nil, wErr
+		}
+		built.Settings = string(withClients)
+	}
+	// END LUCX-FORK
 
 	if !inboundCanHostFallbacks(inbound) {
 		return &built, nil

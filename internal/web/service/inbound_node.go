@@ -788,6 +788,10 @@ func (s *InboundService) setRemoteTrafficLocked(nodeID int, snap *runtime.Traffi
 	}
 	var pendingAdopts []pendingAdopt
 	degradedInbounds := map[int]string{}
+	// Share-only sidecars (qwdtt & co.) never carry clients in node settings;
+	// membership is master-owned and pushed, so the snapshot must neither prune
+	// it nor count as a degraded empty report that re-dirties the node forever.
+	shareOnlyNodeInbounds := map[int]struct{}{}
 
 	newInboundIDs := make(map[int]struct{})
 
@@ -962,7 +966,9 @@ func (s *InboundService) setRemoteTrafficLocked(nodeID int, snap *runtime.Traffi
 			adoptedSettings = deduped
 		}
 		updates := map[string]any{}
-		if !dirty && snapshotDropsEveryHubClient(tx, c.Id, adoptedSettings) {
+		if shareOnlySidecar(c.Protocol) {
+			shareOnlyNodeInbounds[c.Id] = struct{}{}
+		} else if !dirty && snapshotDropsEveryHubClient(tx, c.Id, adoptedSettings) {
 			degradedInbounds[c.Id] = c.Tag
 		} else if !dirty {
 			// Defer lifecycle lift until after client_traffics absorbs this tick's
@@ -1348,6 +1354,9 @@ func (s *InboundService) setRemoteTrafficLocked(nodeID int, snap *runtime.Traffi
 			if k.inboundID != c.Id {
 				continue
 			}
+			if _, so := shareOnlyNodeInbounds[c.Id]; so {
+				continue
+			}
 			if _, degraded := degradedInbounds[c.Id]; degraded {
 				continue
 			}
@@ -1469,6 +1478,9 @@ func (s *InboundService) setRemoteTrafficLocked(nodeID int, snap *runtime.Traffi
 		}
 		// A degraded node (reset/restart/removal) reports zero clients for an inbound the
 		// hub populates; adopting it empties links and ReapSyncOrphans deletes shared clients (#6734).
+		if _, so := shareOnlyNodeInbounds[c.Id]; so {
+			continue
+		}
 		if _, degraded := degradedInbounds[c.Id]; degraded {
 			logger.Warningf("setRemoteTraffic: node %d reported zero clients for tag %q while the hub has %d attached — keeping them and re-pushing", nodeID, snapIb.Tag, len(oldEmailsRows))
 			syncFailedInbounds[c.Id] = struct{}{}
