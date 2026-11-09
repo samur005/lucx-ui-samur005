@@ -23769,7 +23769,7 @@
           },
           {
             "type": "traffic",
-            "summary": "Live traffic deltas plus online, per-node and last-online maps. TUIC also sends source-tagged client deltas with their sampling interval for live speed.",
+            "summary": "Live traffic deltas plus online, per-node and last-online maps. Local polls send traffics/clientTraffics (TUIC adds source-tagged client deltas with their sampling interval); node polls send nodeTraffics/nodeClientTraffics.",
             "payloadSchema": {
               "type": "object",
               "properties": {
@@ -23802,6 +23802,13 @@
                   "nullable": true,
                   "items": {
                     "$ref": "#/components/schemas/Traffic"
+                  }
+                },
+                "nodeClientTraffics": {
+                  "type": "array",
+                  "nullable": true,
+                  "items": {
+                    "$ref": "#/components/schemas/ClientTraffic"
                   }
                 },
                 "onlineClients": {

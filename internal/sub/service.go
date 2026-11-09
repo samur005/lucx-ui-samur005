@@ -1093,6 +1093,15 @@ func (s *SubService) genTuicLink(inbound *model.Inbound, email string) string {
 	if client == nil && len(inst.Clients) > 0 && email == "" {
 		client = &inst.Clients[0]
 	}
+	// LUCX-FORK: subscription bodies read inbound settings with the clients
+	// array stripped (#6758 settings cache), so resolve the client from the
+	// clients table the way every other generator does.
+	if client == nil && email != "" {
+		if rec, ok := s.clientForLink(inbound, email); ok {
+			client = &tuic.TuicClientSettings{Email: rec.Email, UUID: strings.ToLower(strings.TrimSpace(rec.ID)), Password: rec.Password}
+		}
+	}
+	// END LUCX-FORK
 	if client == nil || client.UUID == "" || client.Password == "" {
 		return ""
 	}
