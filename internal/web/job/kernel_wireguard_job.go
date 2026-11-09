@@ -12,6 +12,7 @@ import (
 
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
+	"github.com/mhsanaei/3x-ui/v3/internal/lucx/tunnel"
 	kernelwg "github.com/mhsanaei/3x-ui/v3/internal/lucx/wireguard"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/service"
 	"github.com/mhsanaei/3x-ui/v3/internal/xray"
@@ -27,16 +28,51 @@ type kernelWireguardManager interface {
 	CollectTraffic() []kernelwg.Usage
 	RevokeDisallowed(*model.Inbound) error
 }
+
+// kernelWireguardWgo reconciles the wgobfs obfuscation processes; a variable
+// indirection so tests can fake it without a live tunnel manager.
+var syncWgoFirewall = kernelwg.SyncWgoFirewall
+
+type kernelWireguardWgo interface {
+	ReconcileWgo([]tunnel.Instance)
+}
+
 type KernelWireguardJob struct {
 	store    kernelWireguardStore
 	manager  kernelWireguardManager
+	wgo      kernelWireguardWgo
 	now      func() time.Time
 	lastTick time.Time
 	pending  []*xray.ClientTraffic
+	// reconcileWarned dedupes an unchanged reconcile failure across 10 s
+	// ticks (missing binary on the host would otherwise flood the journal).
+	reconcileWarned map[string]bool
 }
 
 func NewKernelWireguardJob() *KernelWireguardJob {
-	return &KernelWireguardJob{store: &service.InboundService{}, manager: kernelwg.GetManager(), now: time.Now}
+	return &KernelWireguardJob{store: &service.InboundService{}, manager: kernelwg.GetManager(), wgo: tunnel.GetManager(), now: time.Now}
+}
+
+// warnReconcile logs reconcile failures once per distinct message and clears
+// the memory on a clean tick, so a host without the wg/awg binary does not
+// flood the journal every 10 s. Returns how many lines were logged.
+func (j *KernelWireguardJob) warnReconcile(reconcileErrors []error) int {
+	warned := 0
+	fresh := map[string]bool{}
+	for _, err := range reconcileErrors {
+		msg := err.Error()
+		fresh[msg] = true
+		if !j.reconcileWarned[msg] {
+			warned++
+			logger.Warning("kernel WireGuard reconcile: ", err)
+		}
+	}
+	if len(fresh) == 0 {
+		j.reconcileWarned = nil
+	} else {
+		j.reconcileWarned = fresh
+	}
+	return warned
 }
 
 func (j *KernelWireguardJob) Run() {
@@ -46,6 +82,8 @@ func (j *KernelWireguardJob) Run() {
 		return
 	}
 	var desired []kernelwg.Instance
+	var wgoWant []tunnel.Instance
+	var fwStates []kernelwg.WgoFirewallState
 	var preserve []int
 	for _, ib := range rows {
 		if !kernelwg.IsKernel(ib) || !ib.Enable || ib.NodeID != nil {
@@ -61,10 +99,16 @@ func (j *KernelWireguardJob) Run() {
 			continue
 		}
 		desired = append(desired, inst)
+		if wgoInst, fw, ok := kernelwg.ObfuscationTargets(ib); ok {
+			wgoWant = append(wgoWant, wgoInst)
+			fwStates = append(fwStates, fw)
+		}
 	}
-	for _, err := range j.manager.ReconcilePreserving(desired, preserve) {
-		logger.Warning("kernel WireGuard reconcile: ", err)
+	j.warnReconcile(j.manager.ReconcilePreserving(desired, preserve))
+	if j.wgo != nil {
+		j.wgo.ReconcileWgo(wgoWant)
 	}
+	syncWgoFirewall(fwStates)
 	online := map[string]bool{}
 	onlineTags := map[string]bool{}
 	fresh := map[string]*xray.ClientTraffic{}

@@ -60,10 +60,16 @@ if ! have "naive-client-linux-${ARCH}"; then
     rm -rf /tmp/naiveclient "/tmp/${naive_xz}"
 fi
 
+# olcRTC core = ghostlane-project/olcrtc v0.12.1 (d15b37ec), the actively
+# maintained fork of archived openlibrecommunity/olcrtc (#157). Wire format
+# (OLC2 records, OLVC5 frames), the srv YAML schema (mode/auth/room/crypto/
+# net/vp8/sei/video/socks.proxy_*/liveness/debug) and the olcrtc:// URI
+# grammar are unchanged from the archived engine, so the panel's
+# RenderYAML/ClientURI need no edits. go 1.26.3 via GOTOOLCHAIN=auto.
 if ! have "olcrtc-linux-${ARCH}"; then
     git init -q /tmp/olcrtc
-    git -C /tmp/olcrtc remote add origin https://github.com/openlibrecommunity/olcrtc.git
-    git -C /tmp/olcrtc fetch -q --depth 1 origin 54bd269bbc8c1c97c966307e0bca733366694a09
+    git -C /tmp/olcrtc remote add origin https://github.com/ghostlane-project/olcrtc.git
+    git -C /tmp/olcrtc fetch -q --depth 1 origin d15b37ec5076a69ac43ba2538c42156881f592f3
     git -C /tmp/olcrtc checkout -q FETCH_HEAD
     (
         cd /tmp/olcrtc
@@ -73,11 +79,96 @@ if ! have "olcrtc-linux-${ARCH}"; then
     rm -rf /tmp/olcrtc
 fi
 
-# OpenFlux exit (p1neappleXpress/OpenFlux). PIN ba31d0fc — not unpinned main.
+# Telemt (telemt/telemt). Pin a release commit before publishing binaries;
+# the panel keeps it separate from the upstream mtproto/mtg backend.
+if ! have "telemt-linux-${ARCH}"; then
+    case "$ARCH" in
+        amd64) telemt_tgt="x86_64-unknown-linux-musl" ;;
+        arm64) telemt_tgt="aarch64-unknown-linux-musl" ;;
+        *) echo "no telemt for ${ARCH}" >&2; exit 1 ;;
+    esac
+    TELEMT_REF="61afd6c7024b9c4b48497b53109f3eebb899320a"
+    git init -q /tmp/telemt
+    git -C /tmp/telemt remote add origin https://github.com/telemt/telemt.git
+    git -C /tmp/telemt fetch -q --depth 1 origin "$TELEMT_REF"
+    git -C /tmp/telemt checkout -q FETCH_HEAD
+    (
+        cd /tmp/telemt
+        cargo zigbuild --release --target "$telemt_tgt"
+        cp "target/${telemt_tgt}/release/telemt" "${DEST}/telemt-linux-${ARCH}"
+    )
+    chmod +x "${DEST}/telemt-linux-${ARCH}"
+    rm -rf /tmp/telemt
+fi
+
+# mtproto.zig WEB backend. Pinned release source; legacy tproxy remains the
+# default until an operator selects backend=mtproto-zig.
+if ! have "mtproto-zig-linux-${ARCH}"; then
+    case "$ARCH" in
+        amd64) zig_tgt="x86_64-linux" ;;
+        arm64) zig_tgt="aarch64-linux" ;;
+        *) echo "no mtproto-zig for ${ARCH}" >&2; exit 1 ;;
+    esac
+    # v1.15.4 needs Zig 0.16.0 (build.zig uses the 0.16 Run API). Both matrix
+    # jobs run on ubuntu-latest (x86_64) and cross-compile; 0.14.1 stays on PATH.
+    ZIG16_DIR="/tmp/zig-0.16.0-mtproto"
+    rm -rf "$ZIG16_DIR" && mkdir -p "$ZIG16_DIR"
+    fetch -O /tmp/zig16.tar.xz "https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz"
+    tar -xJf /tmp/zig16.tar.xz -C "$ZIG16_DIR" --strip-components=1
+    ZIG_REF="v1.15.4"
+    git init -q /tmp/mtproto-zig
+    git -C /tmp/mtproto-zig remote add origin https://github.com/sleep3r/mtproto.zig.git
+    git -C /tmp/mtproto-zig fetch -q --depth 1 origin "$ZIG_REF"
+    git -C /tmp/mtproto-zig checkout -q FETCH_HEAD
+    (
+        cd /tmp/mtproto-zig
+        "${ZIG16_DIR}/zig" build -Doptimize=ReleaseFast -Dtarget="$zig_tgt"
+        cp zig-out/bin/mtproto-proxy "${DEST}/mtproto-zig-linux-${ARCH}"
+    )
+    chmod +x "${DEST}/mtproto-zig-linux-${ARCH}"
+    rm -rf /tmp/mtproto-zig "$ZIG16_DIR" /tmp/zig16.tar.xz
+fi
+
+# MasterDNSVPN server (masterking32/MasterDnsVPN, Go). PIN main@5f83ee9 —
+# not unpinned (#127). Panel renders the server TOML + secret; the binary is
+# Go std-lib only (no CGO), plain `go build ./cmd/server`.
+if ! have "masterdns-linux-${ARCH}"; then
+    git init -q /tmp/masterdns
+    git -C /tmp/masterdns remote add origin https://github.com/masterking32/MasterDnsVPN.git
+    git -C /tmp/masterdns fetch -q --depth 1 origin 5f83ee9a1690a968f9edf495d3a7e00a2043b0bd
+    git -C /tmp/masterdns checkout -q FETCH_HEAD
+    (
+        cd /tmp/masterdns
+        GOTOOLCHAIN=auto CGO_ENABLED=0 GOOS=linux GOARCH="${ARCH}" go build -trimpath -ldflags="-s -w" -o "${DEST}/masterdns-linux-${ARCH}" ./cmd/server
+    )
+    chmod +x "${DEST}/masterdns-linux-${ARCH}"
+    rm -rf /tmp/masterdns
+fi
+
+# AIVPN server (infosave2007/aivpn, MIT, rust). PIN v1.2.0 (80deb78) — the
+# InitialV2 breaking release; servers and clients must move together. Ships
+# prebuilt: aivpn-server-linux-x86_64 (any glibc x86_64) and
+# aivpn-server-linux-aarch64-musl (static).
+if ! have "aivpn-linux-${ARCH}"; then
+    case "$ARCH" in
+        amd64) aivpn_url="https://github.com/infosave2007/aivpn/releases/download/v1.2.0/aivpn-server-linux-x86_64" ;;
+        arm64) aivpn_url="https://github.com/infosave2007/aivpn/releases/download/v1.2.0/aivpn-server-linux-aarch64-musl" ;;
+        *) echo "no aivpn for ${ARCH}" >&2; exit 1 ;;
+    esac
+    fetch -O "${DEST}/aivpn-linux-${ARCH}" "${aivpn_url}"
+    chmod +x "${DEST}/aivpn-linux-${ARCH}"
+fi
+
+# OpenFlux exit (p1neappleXpress/OpenFlux). PIN v0.13.0 (4f9c786) — not
+# unpinned main (#148). The .conf contract (Role/Mode/Codec/EncryptionKeyFile/
+# CookieStore/URL + [Transport] Type/Priority/URL/Listen) and the openflux://v1
+# envelope (name/negotiate/codec/secret/context/transports) are unchanged
+# against the previous ba31d0fc pin; v0.13.0 adds shareable carriers
+# (vyandex, boards, telemost, avito) the panel form exposes.
 if ! have "openflux-linux-${ARCH}"; then
     git init -q /tmp/openflux
     git -C /tmp/openflux remote add origin https://github.com/p1neappleXpress/OpenFlux.git
-    git -C /tmp/openflux fetch -q --depth 1 origin ba31d0fc38b9b227231056a5ef845f7eae08f42c
+    git -C /tmp/openflux fetch -q --depth 1 origin 4f9c786cdd1d9fcd0c133e2e0fec0c5a12522610
     git -C /tmp/openflux checkout -q FETCH_HEAD
     (
         cd /tmp/openflux
@@ -140,19 +231,11 @@ if ! have "mieru-linux-${ARCH}" || ! have "mieru-client-linux-${ARCH}"; then
     rm -rf /tmp/mieru
 fi
 
+# LUCX: built from source with the PROXY v1 patch (the stock release can't
+# see client IPs behind the SNI gateway). A vendored copy wins, so refresh
+# third_party/sidecars/linux-<arch>/trusttunnel-linux-<arch>.gz after a rebuild.
 if ! have "trusttunnel-linux-${ARCH}"; then
-    case "$ARCH" in
-        amd64) tt_tgz="trusttunnel-v1.3.0-beta.2-linux-x86_64.tar.gz" ;;
-        arm64) tt_tgz="trusttunnel-v1.3.0-beta.2-linux-aarch64.tar.gz" ;;
-        *) echo "no trusttunnel for ${ARCH}" >&2; exit 1 ;;
-    esac
-    fetch -O "/tmp/${tt_tgz}" "https://github.com/TrustTunnel/TrustTunnel/releases/download/v1.3.0-beta.2/${tt_tgz}"
-    mkdir -p /tmp/trusttunnel
-    tar -xzf "/tmp/${tt_tgz}" -C /tmp/trusttunnel
-    tt_bin=$(find /tmp/trusttunnel -type f -name trusttunnel_endpoint | head -n1)
-    mv "$tt_bin" "${DEST}/trusttunnel-linux-${ARCH}"
-    chmod +x "${DEST}/trusttunnel-linux-${ARCH}"
-    rm -rf /tmp/trusttunnel "/tmp/${tt_tgz}"
+    bash "${ROOT}/bin/build-trusttunnel.sh" "${ARCH}" "${DEST}"
 fi
 
 if ! have "trusttunnel-client-linux-${ARCH}"; then
@@ -170,6 +253,24 @@ if ! have "trusttunnel-client-linux-${ARCH}"; then
     rm -rf /tmp/ttclient "/tmp/${ttc_tgz}"
 fi
 
+# wgobfs — Phobos fork of ClusterM wg-obfuscator (GPL-3.0, C). PIN 22aedefd
+# (reactive bump policy). Local packing uses the host cc (or WGOBFS_CC); the
+# release workflow cross-builds the musl static via zig — see release.yml.
+if ! have "wgobfs-linux-${ARCH}"; then
+    WGOBFS_PIN=22aedefda053062dc58c036072d2da6e216d5a34
+    git init -q /tmp/phobos
+    git -C /tmp/phobos remote add origin https://github.com/Ground-Zerro/Phobos.git
+    git -C /tmp/phobos fetch -q --depth 1 origin "${WGOBFS_PIN}"
+    git -C /tmp/phobos checkout -q FETCH_HEAD
+    if [[ "${WGOBFS_CC:-cc}" == *zig* ]]; then
+        sed -i 's/target("avx512f")/target("avx512f,evex512")/' /tmp/phobos/src/phobos-obfuscator/obfuscation.h
+    fi
+    make -C /tmp/phobos/src/phobos-obfuscator -j"$(nproc)" CC="${WGOBFS_CC:-cc}" STATIC=1 ARCH=lucx-neutral
+    cp /tmp/phobos/src/phobos-obfuscator/wg-obfuscator "${DEST}/wgobfs-linux-${ARCH}"
+    chmod +x "${DEST}/wgobfs-linux-${ARCH}"
+    rm -rf /tmp/phobos
+fi
+
 if ! have "anytls-linux-${ARCH}"; then
     overlay="${ROOT}/third_party/patches/anytls-server-main.go.overlay"
     git init -q /tmp/anytls
@@ -177,6 +278,8 @@ if ! have "anytls-linux-${ARCH}"; then
     git -C /tmp/anytls fetch -q --depth 1 origin v0.0.13
     git -C /tmp/anytls checkout -q FETCH_HEAD
     cp "$overlay" /tmp/anytls/cmd/server/main.go
+    cp "${ROOT}/third_party/patches/anytls-server-inbound_tcp.go.overlay" /tmp/anytls/cmd/server/inbound_tcp.go
+    cp "${ROOT}/third_party/patches/anytls-server-users.go.overlay" /tmp/anytls/cmd/server/users.go
     (
         cd /tmp/anytls
         GOTOOLCHAIN=auto CGO_ENABLED=0 GOOS=linux GOARCH="${ARCH}" go build -trimpath -ldflags="-s -w" -o "${DEST}/anytls-linux-${ARCH}" ./cmd/server
