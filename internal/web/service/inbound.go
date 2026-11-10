@@ -2129,6 +2129,24 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 			}
 		}
 	}
+	// LUCX-HOOK: share-only sidecar settings are re-serialized from a typed
+	// config by normalizeLucxSidecarsOnUpdate, which drops any "clients" array.
+	// A master push carries the members in settings.clients
+	// (buildInboundForNodePush), so a node reads them here, before normalizing,
+	// and mirrors them into client_inbounds below.
+	var shareOnlyPushClients []model.Client
+	shareOnlyPushHasClients := false
+	if shareOnlySidecar(inbound.Protocol) && s.FromNodeSync {
+		var probe map[string]json.RawMessage
+		if json.Unmarshal([]byte(inbound.Settings), &probe) == nil {
+			if raw, ok := probe["clients"]; ok && string(raw) != "null" {
+				if cs, err := ParseInboundSettingsClients(inbound.Settings); err == nil {
+					shareOnlyPushClients, shareOnlyPushHasClients = cs, true
+				}
+			}
+		}
+	}
+	// END LUCX-HOOK
 	// LUCX-HOOK: sidecar normalize + AWG subnet/client allocation.
 	if err := s.normalizeLucxSidecarsOnUpdate(inbound, oldInbound); err != nil {
 		return inbound, false, err
@@ -2418,15 +2436,22 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 				needRestart = true
 			}
 		}
-		newClients, gcErr := s.GetClients(oldInbound)
-		if gcErr != nil {
-			return gcErr
-		}
 		// LUCX-HOOK: share-only sidecars keep membership in client_inbounds
-		// only and their settings never carry a clients array, so an empty
-		// GetClients here means "no membership data in this save", not
-		// "detach everybody" (#196).
-		if !shareOnlySidecar(oldProtocol) || len(newClients) > 0 {
+		// only and their (normalized) settings never carry a clients array, so
+		// a plain save must not detach everybody (#196). The only membership
+		// data a save can bring is a master push's settings.clients, read
+		// before normalization above.
+		if shareOnlySidecar(oldInbound.Protocol) {
+			if shareOnlyPushHasClients {
+				if err := s.clientService.SyncInbound(tx, oldInbound.Id, shareOnlyPushClients); err != nil {
+					return err
+				}
+			}
+		} else {
+			newClients, gcErr := s.GetClients(oldInbound)
+			if gcErr != nil {
+				return gcErr
+			}
 			if err := s.clientService.SyncInbound(tx, oldInbound.Id, newClients); err != nil {
 				return err
 			}
@@ -2514,6 +2539,36 @@ func (s *InboundService) buildInboundForNodePush(tx *gorm.DB, inbound *model.Inb
 	if err := json.Unmarshal([]byte(inbound.Settings), &settings); err != nil {
 		return nil, err
 	}
+
+	// LUCX-HOOK: share-only sidecar inbounds keep their members only in
+	// client_inbounds, never in settings. A node would otherwise get an inbound
+	// without clients and drop them, so the push carries the master's members
+	// in settings.clients; the node reads them before normalizing
+	// (UpdateInbound with FromNodeSync).
+	if shareOnlySidecar(inbound.Protocol) && inbound.NodeID != nil && inbound.Id > 0 {
+		clients, err := s.clientService.ListForInbound(tx, inbound.Id)
+		if err != nil {
+			return nil, err
+		}
+		raw, err := json.Marshal(clients)
+		if err != nil {
+			return nil, err
+		}
+		var arr []any
+		if err := json.Unmarshal(raw, &arr); err != nil {
+			return nil, err
+		}
+		if arr == nil {
+			arr = []any{}
+		}
+		settings["clients"] = arr
+		modified, err := json.MarshalIndent(settings, "", "  ")
+		if err != nil {
+			return nil, err
+		}
+		built.Settings = string(modified)
+	}
+	// END LUCX-HOOK
 
 	if !inboundCanHostFallbacks(inbound) {
 		return &built, nil

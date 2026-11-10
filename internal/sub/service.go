@@ -1093,6 +1093,14 @@ func (s *SubService) genTuicLink(inbound *model.Inbound, email string) string {
 	if client == nil && len(inst.Clients) > 0 && email == "" {
 		client = &inst.Clients[0]
 	}
+	// LUCX-HOOK: the subscriber may live only in the clients table (settings
+	// JSON without it); fall back to the client record so the link is not empty.
+	if client == nil && email != "" {
+		if c, ok := s.clientForLink(inbound, email); ok {
+			client = &tuic.TuicClientSettings{UUID: strings.ToLower(strings.TrimSpace(c.ID)), Password: c.Password, Email: c.Email}
+		}
+	}
+	// END LUCX-HOOK
 	if client == nil || client.UUID == "" || client.Password == "" {
 		return ""
 	}

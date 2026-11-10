@@ -788,6 +788,9 @@ func (s *InboundService) setRemoteTrafficLocked(nodeID int, snap *runtime.Traffi
 	}
 	var pendingAdopts []pendingAdopt
 	degradedInbounds := map[int]string{}
+	// LUCX-HOOK: share-only sidecar inbounds (membership lives on the master in
+	// client_inbounds; node settings carry no clients array).
+	shareOnlyInbounds := map[int]struct{}{}
 
 	newInboundIDs := make(map[int]struct{})
 
@@ -962,7 +965,9 @@ func (s *InboundService) setRemoteTrafficLocked(nodeID int, snap *runtime.Traffi
 			adoptedSettings = deduped
 		}
 		updates := map[string]any{}
-		if !dirty && snapshotDropsEveryHubClient(tx, c.Id, adoptedSettings) {
+		if shareOnlySidecar(c.Protocol) {
+			shareOnlyInbounds[c.Id] = struct{}{}
+		} else if !dirty && snapshotDropsEveryHubClient(tx, c.Id, adoptedSettings) {
 			degradedInbounds[c.Id] = c.Tag
 		} else if !dirty {
 			// Defer lifecycle lift until after client_traffics absorbs this tick's
@@ -1348,6 +1353,9 @@ func (s *InboundService) setRemoteTrafficLocked(nodeID int, snap *runtime.Traffi
 			if k.inboundID != c.Id {
 				continue
 			}
+			if _, shareOnly := shareOnlyInbounds[c.Id]; shareOnly {
+				continue
+			}
 			if _, degraded := degradedInbounds[c.Id]; degraded {
 				continue
 			}
@@ -1466,6 +1474,9 @@ func (s *InboundService) setRemoteTrafficLocked(nodeID int, snap *runtime.Traffi
 			}
 			applyMasterClientLifecycle(&clients[i], existing, csPtr)
 			filtered = append(filtered, clients[i])
+		}
+		if _, shareOnly := shareOnlyInbounds[c.Id]; shareOnly {
+			continue
 		}
 		// A degraded node (reset/restart/removal) reports zero clients for an inbound the
 		// hub populates; adopting it empties links and ReapSyncOrphans deletes shared clients (#6734).
