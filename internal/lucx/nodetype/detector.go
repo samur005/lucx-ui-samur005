@@ -38,6 +38,7 @@ var DefaultLucXFeatures = []string{
 	"mieru",
 	"trusttunnel",
 	"anytls",
+	"tproxy",
 	"cluster",
 	"cover",
 	"gateway",
@@ -52,6 +53,7 @@ var LucXOnlyProtocols = map[string]bool{
 	"mieru":       true,
 	"trusttunnel": true,
 	"anytls":      true,
+	"tproxy":      true,
 	"cover":       true,
 	"gateway":     true,
 }

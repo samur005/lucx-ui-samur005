@@ -150,8 +150,9 @@ type managed struct {
 // it is a map lookup or a field read, never process I/O. Per-key lifecycle
 // work runs under managed.opMu, taken after mu has been released.
 type Manager struct {
-	mu    sync.Mutex
-	swept bool
+	mu       sync.Mutex
+	swept    bool
+	keyLocks sync.Map
 	// sweepEnabled is set only on the shared instance built by GetManager.
 	// The orphan sweep SIGKILLs every process named like one of our cores,
 	// which is right for the running panel and very wrong for `go test` on a
@@ -163,6 +164,13 @@ type Manager struct {
 	trustTunnelTraffic map[string]*trustTunnelCursor
 	anytlsTraffic      map[string]*anytlsCursor
 	sidecarDelta       map[string]*deltaCursor
+}
+
+func (m *Manager) lockKey(key string) func() {
+	value, _ := m.keyLocks.LoadOrStore(key, &sync.Mutex{})
+	lock := value.(*sync.Mutex)
+	lock.Lock()
+	return lock.Unlock
 }
 
 func newManager() *Manager {
@@ -247,6 +255,8 @@ func (m *Manager) Ensure(inst Instance) error {
 	}
 	m.sweepOrphans()
 	key := inst.ManageKey()
+	unlock := m.lockKey(key)
+	defer unlock()
 	mc := m.acquire(key)
 	mc.opMu.Lock()
 	defer mc.opMu.Unlock()
@@ -315,6 +325,8 @@ func (m *Manager) Remove(key string) {
 	if key == "" {
 		return
 	}
+	unlock := m.lockKey(key)
+	defer unlock()
 	m.mu.Lock()
 	mc, ok := m.cores[key]
 	delete(m.cores, key)
@@ -340,10 +352,24 @@ func (m *Manager) Remove(key string) {
 // No-op for legacy single-core keys (naive / olcrtc / qwdtt without suffix).
 // CSQTT is the exception: csqtt.db.main_device_id survives a delete otherwise.
 func removeManagedFiles(key string) {
-	if key == CsqttKey {
-		p := dataDirFor(CsqttKey, Csqtt)
+	if key == CsqttKey || key == MasterdnsKey || key == AivpnKey {
+		name := Csqtt
+		switch key {
+		case MasterdnsKey:
+			name = Masterdns
+		case AivpnKey:
+			name = Aivpn
+		}
+		p := dataDirFor(key, name)
 		if err := os.RemoveAll(p); err != nil && !os.IsNotExist(err) {
 			logger.Warningf("tunnel: remove %s: %v", p, err)
+		}
+		// Rendered server TOML/JSON + secret live in the work dir (not the data
+		// dir); single-credential keys keep them until the inbound is gone.
+		for _, extra := range workDirFilesForSingleInstanceKey(key) {
+			if err := os.Remove(extra); err != nil && !os.IsNotExist(err) {
+				logger.Warningf("tunnel: remove %s: %v", extra, err)
+			}
 		}
 		return
 	}
@@ -368,6 +394,10 @@ func removeManagedFiles(key string) {
 		core = Tproxy
 	case strings.HasPrefix(key, "mtproxy-"):
 		core = Mtproxy
+	case strings.HasPrefix(key, "telemt-"):
+		core = Telemt
+	case strings.HasPrefix(key, "mtproto-zig-"):
+		core = MtprotoZig
 	case strings.HasPrefix(key, "naiveout-"):
 		core = NaiveClient
 	case strings.HasPrefix(key, "naive-"):
@@ -398,6 +428,9 @@ func removeManagedFiles(key string) {
 	if core == Tproxy {
 		paths = append(paths, filepath.Join(workDir(), key+"-profiles.json"))
 	}
+	if core == Mtproxy {
+		paths = append(paths, filepath.Join(workDir(), key+"-secret"))
+	}
 	if core == Openflux {
 		paths = append(paths, filepath.Join(workDir(), key+"-secret.txt"))
 	}
@@ -407,6 +440,18 @@ func removeManagedFiles(key string) {
 			logger.Warningf("tunnel: remove %s: %v", p, err)
 		}
 	}
+}
+
+// workDirFilesForSingleInstanceKey returns rendered working files of the
+// single-credential sidecars that live in the shared work dir.
+func workDirFilesForSingleInstanceKey(key string) []string {
+	if strings.HasPrefix(key, "masterdns") {
+		return []string{key + ".toml", key + "-secret.txt"}
+	}
+	if strings.HasPrefix(key, "aivpn") {
+		return []string{key + ".json"}
+	}
+	return nil
 }
 
 func isMultiInstanceKey(key string) bool {
@@ -480,6 +525,8 @@ func (m *Manager) Stop(core Name) error {
 
 // StopKey terminates one managed key if running.
 func (m *Manager) StopKey(key string) error {
+	unlock := m.lockKey(key)
+	defer unlock()
 	mc := m.acquire(key)
 	mc.opMu.Lock()
 	defer mc.opMu.Unlock()
@@ -504,6 +551,14 @@ func (m *Manager) StopAll() {
 		wg.Add(1)
 		go func(key string, mc *managed) {
 			defer wg.Done()
+			unlock := m.lockKey(key)
+			defer unlock()
+			m.mu.Lock()
+			current := m.cores[key] == mc
+			m.mu.Unlock()
+			if !current {
+				return
+			}
 			mc.opMu.Lock()
 			defer mc.opMu.Unlock()
 			if mc.proc != nil && mc.proc.IsRunning() {
@@ -713,6 +768,17 @@ func (m *Manager) ReconcileGateway(want []Instance) {
 	m.ReconcileWanted(Gateway, "gateway-", string(Gateway), want)
 }
 
+// ReconcileWgo drives the WG-transport obfuscation processes of kernel
+// WireGuard inbounds (keys wgo-<id>).
+func (m *Manager) ReconcileWgo(want []Instance) {
+	m.ReconcileWanted(Wgo, "wgo-", string(Wgo), want)
+}
+
+// ReconcileWgosocks drives every desired wgosocks SOCKS5-exit inbound.
+func (m *Manager) ReconcileWgosocks(want []Instance) {
+	m.ReconcileWanted(Wgosocks, "wgosocks-", string(Wgosocks), want)
+}
+
 // ReconcileWanted Ensures each wanted instance of core and Removes orphan
 // keys that match prefix or legacyKey but are not in want.
 func (m *Manager) ReconcileWanted(core Name, prefix, legacyKey string, want []Instance) {
@@ -823,7 +889,7 @@ func (m *Manager) start(inst Instance, mc *managed) error {
 		}
 	}
 	key := inst.ManageKey()
-	if err := os.MkdirAll(dataDirFor(key, inst.Core), 0o700); err != nil {
+	if err := mkdirPrivate(dataDirFor(key, inst.Core)); err != nil {
 		return fmt.Errorf("tunnel: create data dir: %w", err)
 	}
 	// Routed instance: chown its assets (extra files like the cert copies and
@@ -831,6 +897,9 @@ func (m *Manager) start(inst Instance, mc *managed) error {
 	// Chown failure = the sandbox lacks CAP_CHOWN (old unit): fall back to
 	// running as root — egress stays direct until the unit is refreshed.
 	if inst.RunUid > 0 {
+		if err := ensureWorkDirTraversable(); err != nil {
+			logger.Warningf("tunnel: %s: %s not reachable for the run-as uid: %v", key, workDir(), err)
+		}
 		paths := make([]string, 0, len(inst.ExtraFiles)+1)
 		for name := range inst.ExtraFiles {
 			paths = append(paths, filepath.Join(workDir(), name))
@@ -876,6 +945,13 @@ func (m *Manager) start(inst Instance, mc *managed) error {
 		// trusttunnel_endpoint <vpn.toml> <hosts.toml>; companion files
 		// (credentials/rules) are referenced from within vpn.toml.
 		args = []string{cfgPath, filepath.Join(workDir(), trustTunnelHostsFileName(key))}
+	case inst.Core == Wgo, inst.Core == Wgosocks:
+		// wgobfs takes an INI config path (Phobos fork of wg-obfuscator).
+		args = []string{"-c", cfgPath}
+	case inst.Core == Telemt:
+		args = []string{cfgPath}
+	case inst.Core == MtprotoZig:
+		args = []string{cfgPath}
 	default:
 		return fmt.Errorf("tunnel: no start args for core %q", inst.Core)
 	}
