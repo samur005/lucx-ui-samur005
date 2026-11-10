@@ -2436,22 +2436,25 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 				needRestart = true
 			}
 		}
-		// LUCX-FORK: for share-only sidecars settings never hold clients, so
-		// only a master push that carried them may re-sync the links; any other
-		// save leaves client_inbounds alone instead of pruning it to nothing.
-		if shareOnlySidecar(oldInbound.Protocol) {
-			if shareOnlyHasPushed {
-				if err := s.clientService.SyncInbound(tx, oldInbound.Id, shareOnlyPushed); err != nil {
-					return err
-				}
+		// LUCX-FORK: share-only sidecars keep membership in client_inbounds
+		// only and their settings never carry a clients array. A master push
+		// that carried clients (captured before normalize dropped them) re-syncs
+		// the links on the node; otherwise upstream #196 applies: an empty
+		// GetClients means "no membership data in this save", not "detach
+		// everybody".
+		if shareOnlySidecar(oldProtocol) && shareOnlyHasPushed {
+			if err := s.clientService.SyncInbound(tx, oldInbound.Id, shareOnlyPushed); err != nil {
+				return err
 			}
 		} else {
 			newClients, gcErr := s.GetClients(oldInbound)
 			if gcErr != nil {
 				return gcErr
 			}
-			if err := s.clientService.SyncInbound(tx, oldInbound.Id, newClients); err != nil {
-				return err
+			if !shareOnlySidecar(oldProtocol) || len(newClients) > 0 {
+				if err := s.clientService.SyncInbound(tx, oldInbound.Id, newClients); err != nil {
+					return err
+				}
 			}
 		}
 		// END LUCX-FORK
