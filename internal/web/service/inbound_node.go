@@ -282,7 +282,7 @@ func seedNodeTrafficRowFromRecord(tx *gorm.DB, row *xray.ClientTraffic, cs xray.
 	row.Reset, row.ResetDay, row.ResetWeekday, row.ResetMax = rec.Reset, rec.ResetDay, rec.ResetWeekday, rec.ResetMax
 	master := &xray.ClientTraffic{Enable: rec.Enable, ExpiryTime: row.ExpiryTime, Total: rec.TotalGB}
 	row.Enable = rec.Enable
-	if rec.Enable && !cs.Enable && !nodeDisableIsStale(master, cs, now, 0, 0) {
+	if rec.Enable && !cs.Enable && !nodeDisableIsStale(master, cs.Up+cs.Down, now, 0, 0) {
 		row.Enable = false
 	}
 	return nil
